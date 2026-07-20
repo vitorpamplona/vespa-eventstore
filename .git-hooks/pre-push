@@ -1,0 +1,22 @@
+#!/bin/bash
+# Pre-push: block a push whose tests do not pass. CI runs the full gate on main;
+# this is the fast local check.
+
+GREEN='\033[1;32m'
+NC='\033[0m'
+
+echo "JAVA_HOME = $JAVA_HOME"
+java -version
+
+echo "Running tests..."
+./gradlew test --daemon
+status=$?
+
+if [ "$status" = 0 ]; then
+    echo "All tests passed."
+    exit 0
+else
+    echo 1>&2 "Some tests failed."
+    echo -e "Run ${GREEN}./gradlew test${NC} and fix the failures before pushing."
+    exit 1
+fi

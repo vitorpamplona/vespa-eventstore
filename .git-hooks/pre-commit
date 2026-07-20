@@ -1,0 +1,21 @@
+#!/bin/bash
+# Pre-commit: block a commit whose code is not spotless-clean.
+
+GREEN='\033[1;32m'
+NC='\033[0m'
+
+echo "JAVA_HOME = $JAVA_HOME"
+java -version
+
+echo "Running spotlessCheck..."
+./gradlew spotlessCheck --daemon
+status=$?
+
+if [ "$status" = 0 ]; then
+    echo "spotlessCheck found no problems."
+    exit 0
+else
+    echo 1>&2 "spotlessCheck found formatting violations."
+    echo -e "Run ${GREEN}./gradlew spotlessApply${NC} to fix them, then re-commit."
+    exit 1
+fi
