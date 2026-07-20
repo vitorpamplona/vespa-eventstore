@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.vanniktech.mavenPublish)
 }
 
 dependencies {
@@ -21,4 +22,38 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+mavenPublishing {
+    coordinates(
+        groupId = "com.vitorpamplona.quartz.eventstore",
+        artifactId = "store",
+        version = libs.versions.app.get(),
+    )
+    publishToMavenCentral(automaticRelease = true)
+    signAllPublications()
+    pom {
+        name = "Vespa Event Store"
+        description = "A Vespa-backed Quartz IEventStore with trust-ranked NIP-50 search: the open() front door, Nostr storage semantics, and the NIP-85 trust projection."
+        inceptionYear = "2026"
+        url = "https://github.com/vitorpamplona/vespa-eventstore/"
+        licenses {
+            license {
+                name = "MIT License"
+                url = "https://github.com/vitorpamplona/vespa-eventstore/blob/main/LICENSE"
+            }
+        }
+        developers {
+            developer {
+                id = "vitorpamplona"
+                name = "Vitor Pamplona"
+                url = "http://vitorpamplona.com"
+                email = "vitor@vitorpamplona.com"
+            }
+        }
+        scm {
+            url = "https://github.com/vitorpamplona/vespa-eventstore/"
+            connection = "https://github.com/vitorpamplona/vespa-eventstore/.git"
+        }
+    }
 }

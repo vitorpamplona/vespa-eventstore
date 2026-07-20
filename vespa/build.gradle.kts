@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     // Publishes InMemoryEventIndex (src/testFixtures) to downstream module tests.
     `java-test-fixtures`
+    alias(libs.plugins.vanniktech.mavenPublish)
 }
 
 dependencies {
@@ -43,4 +44,38 @@ val vespaAppZip by tasks.registering(Zip::class) {
 
 tasks.named<Copy>("processResources") {
     from(vespaAppZip)
+}
+
+mavenPublishing {
+    coordinates(
+        groupId = "com.vitorpamplona.quartz.eventstore",
+        artifactId = "vespa",
+        version = libs.versions.app.get(),
+    )
+    publishToMavenCentral(automaticRelease = true)
+    signAllPublications()
+    pom {
+        name = "Vespa Event Store: engine"
+        description = "Vespa document shapes, EventQuery -> YQL, the Vespa clients, and the bundled Vespa application package."
+        inceptionYear = "2026"
+        url = "https://github.com/vitorpamplona/vespa-eventstore/"
+        licenses {
+            license {
+                name = "MIT License"
+                url = "https://github.com/vitorpamplona/vespa-eventstore/blob/main/LICENSE"
+            }
+        }
+        developers {
+            developer {
+                id = "vitorpamplona"
+                name = "Vitor Pamplona"
+                url = "http://vitorpamplona.com"
+                email = "vitor@vitorpamplona.com"
+            }
+        }
+        scm {
+            url = "https://github.com/vitorpamplona/vespa-eventstore/"
+            connection = "https://github.com/vitorpamplona/vespa-eventstore/.git"
+        }
+    }
 }

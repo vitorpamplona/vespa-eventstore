@@ -7,6 +7,8 @@ plugins {
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.diffplug.spotless)
+    // Load once on the root classpath; the publishable modules apply it (see :vespa/:store).
+    alias(libs.plugins.vanniktech.mavenPublish) apply false
 }
 
 val ktlintVersion = libs.versions.ktlint.get()

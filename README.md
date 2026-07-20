@@ -31,13 +31,16 @@ Vespa is a prerequisite, like a database — stand one up, then point the store 
 
 ```kotlin
 dependencies {
-    implementation("com.github.vitorpamplona.vespa-eventstore:store:main-SNAPSHOT")
-    testImplementation(testFixtures("com.github.vitorpamplona.vespa-eventstore:vespa:main-SNAPSHOT"))
+    implementation("com.vitorpamplona.quartz.eventstore:store:0.1.0")
+    testImplementation(testFixtures("com.vitorpamplona.quartz.eventstore:vespa:0.1.0"))
 }
 ```
 
+Released to Maven Central. For a commit snapshot, JitPack works too:
+`com.github.vitorpamplona.vespa-eventstore:store:<commit>`.
+
 ```kotlin
-import com.vitorpamplona.sot.store.VespaEventStores
+import com.vitorpamplona.quartz.eventstore.store.VespaEventStores
 
 // Connects, and on a fresh Vespa deploys the bundled schema (autoDeploy, default on).
 VespaEventStores.open("http://localhost:8080").use { store ->
@@ -96,6 +99,19 @@ Extensions travel inside the `search` string:
 
 Kotlin 2.4 / JDK 21. Quartz comes from JitPack, pinned by commit in
 `gradle/libs.versions.toml`.
+
+## Releasing
+
+Publishing uses the [vanniktech Maven Publish](https://github.com/vanniktech/gradle-maven-publish-plugin)
+plugin (the same one Quartz ships to Central with).
+
+- **CI** (`.github/workflows/build.yml`) runs `./gradlew build` on every push and PR to `main`.
+- **Release** (`.github/workflows/create-release.yml`) publishes to Maven Central on a
+  `v*` tag via `./gradlew publishAllPublicationsToMavenCentral`. It needs four repo secrets:
+  `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `SIGNING_PRIVATE_KEY` (armored GPG key),
+  `SIGNING_PASSWORD`.
+
+Bump the version in `gradle/libs.versions.toml` (`app`), tag `vX.Y.Z`, and push the tag.
 
 ## License
 
