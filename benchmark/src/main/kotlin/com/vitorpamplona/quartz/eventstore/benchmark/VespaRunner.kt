@@ -99,6 +99,13 @@ object VespaRunner {
             timeQuery("count(reactions)", queries) { store.count(Filter(kinds = listOf(7))) }
             timeQuery("nip50-search", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), search = w.term(i), limit = 50)) }
 
+            // Concurrent throughput — the metric a relay lives on (target 50k events/sec).
+            if (System.getenv("BENCH_THROUGHPUT") != null) {
+                val conc = (System.getenv("BENCH_CONCURRENCY") ?: "1,8,32,64,128").split(",").mapNotNull { it.trim().toIntOrNull() }
+                val durMs = System.getenv("BENCH_DURATION_MS")?.toLongOrNull() ?: 4_000L
+                ThroughputBench.run(store, corpus, conc, durMs)
+            }
+
             // --- per-event insert() on an id-disjoint corpus (no dedup collisions) ---
             // Skipped in query-only iteration so the store stays == corpus for parity.
             if (!skipPerEvent) {
