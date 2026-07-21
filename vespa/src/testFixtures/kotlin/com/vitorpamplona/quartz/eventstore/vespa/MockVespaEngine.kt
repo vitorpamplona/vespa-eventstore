@@ -123,14 +123,24 @@ class MockVespaEngine {
         val docPrefix = "/document/v1/event/event/docid/"
         return when {
             method == "POST" && path.startsWith(docPrefix) -> {
-                val fields =
-                    Json
-                        .parseToJsonElement(body)
-                        .jsonObject
-                        .getValue("fields")
-                        .jsonObject
-                runBlocking { inner.put(EventDoc.fromSummary(fields)) }
-                Reply(200, """{"id":"$path"}""")
+                // Test-and-set: real Vespa evaluates `condition` against the existing
+                // doc and answers 412 TEST_AND_SET_CONDITION_FAILED when it does not
+                // hold. The client only ever sends the insert-if-absent form
+                // (create=true + the always-false condition): exists -> 412, absent
+                // -> created. The feed client maps the 412 to Result.conditionNotMet.
+                val id = path.removePrefix(docPrefix)
+                if (params(rawQuery.orEmpty())["condition"] != null && runBlocking { inner.get(id) } != null) {
+                    Reply(412, """{"id":"$path","message":"ReturnCode(TEST_AND_SET_CONDITION_FAILED, Condition did not match document)"}""")
+                } else {
+                    val fields =
+                        Json
+                            .parseToJsonElement(body)
+                            .jsonObject
+                            .getValue("fields")
+                            .jsonObject
+                    runBlocking { inner.put(EventDoc.fromSummary(fields)) }
+                    Reply(200, """{"id":"$path"}""")
+                }
             }
 
             method == "DELETE" && path.startsWith(docPrefix) -> {

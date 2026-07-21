@@ -71,6 +71,12 @@ class CountingEventIndex(
         inner.put(doc)
     }
 
+    /** ONE engine round trip whether it creates or reports a duplicate (that is the point of the conditional write). */
+    override suspend fun putIfAbsent(doc: EventDoc): Boolean {
+        putCalls.incrementAndGet()
+        return inner.putIfAbsent(doc).also { created -> if (created) puts.incrementAndGet() }
+    }
+
     override suspend fun putAll(docs: List<EventDoc>) {
         putCalls.incrementAndGet()
         puts.addAndGet(docs.size.toLong())

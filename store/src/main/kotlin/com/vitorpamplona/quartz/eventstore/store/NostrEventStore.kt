@@ -268,16 +268,18 @@ class NostrEventStore(
         // still broadcasts the insert to live subscribers.
         if (event.kind.isEphemeral()) return
         if (event.isExpired()) throw RejectedException(Rejections.EXPIRED)
-        // The three admission reads — dedup, NIP-09 tombstone, NIP-62 vanish — are
-        // independent, so fire them together: a per-event insert pays ONE round
-        // trip's latency for the guards, not three in series. The results are then
-        // checked in the original precedence (duplicate > deleted > vanished), so
-        // which rejection wins is unchanged.
+        // The NIP-09 tombstone and NIP-62 vanish guards are independent, so they
+        // fire together: one round trip's latency. The dup probe is GONE from the
+        // read side — the WRITE detects duplicates ([EventIndex.putIfAbsent], an
+        // engine-side conditional create), so admission costs two round trips and
+        // 2 reads/event instead of 3. Checking the guards before the dup signal
+        // cannot change which rejection wins: a stored duplicate can never be
+        // tombstoned or vanished (enforcement ERASES the event, so it would not
+        // still be stored), and [supersede]'s comparisons are strict, so an exact
+        // duplicate replaceable passes it untouched and still reports DUPLICATE.
         coroutineScope {
-            val existing = async { index.get(event.id) }
             val deleted = async { isDeleted(event) }
             val vanished = async { isVanished(event) }
-            if (existing.await() != null) throw RejectedException(Rejections.DUPLICATE)
             if (deleted.await()) throw RejectedException(Rejections.DELETED)
             if (vanished.await()) throw RejectedException(Rejections.VANISHED)
         }
@@ -286,7 +288,7 @@ class NostrEventStore(
             is RequestToVanishEvent -> applyVanish(event)
             else -> supersede(event)
         }
-        index.put(event.toDoc())
+        if (!index.putIfAbsent(event.toDoc())) throw RejectedException(Rejections.DUPLICATE)
     }
 
     // ---- queries ------------------------------------------------------------

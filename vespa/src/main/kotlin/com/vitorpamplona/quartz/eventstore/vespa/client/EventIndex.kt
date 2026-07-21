@@ -40,6 +40,21 @@ interface EventIndex : AutoCloseable {
     suspend fun put(doc: EventDoc)
 
     /**
+     * Insert-if-absent: store [doc] only when no document with its id exists,
+     * returning whether it was created (false = a doc with this id already
+     * existed — the duplicate signal, with no separate [get] round trip). The
+     * real client folds this into ONE conditional write: a put with
+     * create-if-nonexistent and an always-false test-and-set condition, which
+     * the engine evaluates atomically against the existing document. This
+     * default rides [get]+[put], equivalent under the store's single writer.
+     */
+    suspend fun putIfAbsent(doc: EventDoc): Boolean {
+        if (get(doc.id) != null) return false
+        put(doc)
+        return true
+    }
+
+    /**
      * Bulk [put]: same contract (all acked and visible on return), but an
      * implementation may pipeline the writes. The real client keeps them all in
      * flight at once, which is what makes million-event ingest feasible.

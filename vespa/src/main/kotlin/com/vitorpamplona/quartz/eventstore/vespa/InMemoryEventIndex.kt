@@ -43,6 +43,8 @@ class InMemoryEventIndex : EventIndex {
         docs[doc.id] = doc
     }
 
+    override suspend fun putIfAbsent(doc: EventDoc): Boolean = docs.putIfAbsent(doc.id, doc) == null
+
     override suspend fun remove(id: String) {
         docs.remove(id)
     }

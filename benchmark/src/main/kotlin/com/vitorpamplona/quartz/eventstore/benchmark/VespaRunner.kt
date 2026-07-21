@@ -126,6 +126,18 @@ object VespaRunner {
                         runBlocking { for (e in extra) runCatching { store.insert(e) } }
                     }
                 report("insert()", extra.size, singleNanos)
+
+                // The relay rebroadcast case: clients replay events they saw on
+                // other relays, so a big share of real EVENT traffic is
+                // duplicates. Re-inserting the batch just stored measures the
+                // store's duplicate path (guards + the conditional put that
+                // reports the dup — no separate probe read).
+                println("per-event re-insert of the same ${extra.size} events (all duplicates) ...")
+                val dupNanos =
+                    measureNanoTime {
+                        runBlocking { for (e in extra) runCatching { store.insert(e) } }
+                    }
+                report("insert() duplicates", extra.size, dupNanos)
             }
         } finally {
             store.close()
