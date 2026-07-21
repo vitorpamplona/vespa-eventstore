@@ -1,24 +1,122 @@
 # vespa-eventstore
 
-A [Vespa](https://vespa.ai)-backed [Quartz](https://github.com/vitorpamplona/amethyst) Event Store with **trust-ranked NIP-50 search**.
+A [Vespa](https://vespa.ai)-backed [Quartz](https://github.com/vitorpamplona/amethyst) Event Store with **trust-ranked NIP-50 search** based on NIP-85 events.
 
-Drop it in wherever a Quartz app needs an event store that scales past SQLite and
-comes with good full-text search out of the box — lexical by default, ranked by a
-[NIP-85](https://github.com/nostr-protocol/nips/blob/master/85.md) web of trust when you have the data for it.
+## Features
 
-## What you get
+- **NIP-01 Storage & Retrieval**:
+  - Stores Nostr events and retrieves using Nostr filters
 
-- **A Vespa EventStore.** One copy of the data: Vespa *is* the store, not a
-  separate index to keep in sync. Full Nostr semantics — NIP-01 filters, NIP-09
-  deletion + tombstones, NIP-40 expiry, NIP-62 vanish, replaceable/addressable
-  supersession — plus a batched bulk-ingest fast path and negentropy snapshots.
-- **NIP-50 search that's good with zero configuration.** A banded BM25 relevance
-  (match-quality tiers, IDF weighting, trigram typo-recall) ranks results with no
-  trust data at all.
-- **Trust ranking when you want it.** Feed [NIP-85](https://github.com/nostr-protocol/nips/blob/master/85.md)
-  kind-30382/10040 events like any other event and searches can rank by the
-  searcher's web of trust — no extra API, the ranking projection updates itself on
-  every insert.
+- **Replaceable Events**:
+    - Forces unique constraint by kind, pubkey
+    - Old versions are removed when newer versions arrive.
+    - Old versions are blocked if newer versions exist.
+    - Same `created_at`: NIP-01 lexical-id tiebreaker (lowest id wins).
+
+- **Addressable Events**:
+    - Forces unique constraint by kind, pubkey, d-tag
+    - Old versions are removed when newer versions arrive.
+    - Old versions are blocked if newer versions exist.
+    - Same `created_at`: NIP-01 lexical-id tiebreaker (lowest id wins).
+
+- **Ephemeral Events**
+    - Ephemeral events never stored.
+
+- **NIP-40 Expirations**
+    - Deletes expired events.
+    - Blocks expired events from being reinserted
+
+- **NIP-09 Deletion Events**
+    - Deletes by event id
+    - Deletes by address up to and including the deletion's `created_at` (newer versions are kept).
+    - Blocks deleted events from being re-inserted.
+    - Only the original author's deletions take effect; cross-author kind-5s are stored but inert.
+    - GiftWraps are deleted by p-tag
+
+- **NIP-62 Right to Vanish**
+    - Deletes all user events until the `created_at`
+    - Blocks vanished events from being re-inserted.
+    - GiftWraps are deleted by p-tag
+
+- **NIP-45 Counts**:
+    - Counts records matching Nostr filters
+
+- **NIP-50 Full Text Search**:
+    - banded BM25 relevance (match-quality tiers, IDF weighting, trigram typo-recall) ranks results
+    - Observer-centric queries by weighting search results by NIP-85 user scores
+    - Indexes updated on replaceables, deletions, vanish and expirations.
+
+- **NIP-77: Negentropy**:
+  - Fully sync with other relays out there.
+
+- **NIP-91: AND operator for tags**:
+    - Allows queries matching two or more tags at the same time
+
+### Search grammar
+
+Extensions travel inside the `search` string:
+
+| Token | Effect |
+|---|---|
+| `observer:<64-hex>` | Rank through this pubkey's web of trust. Absent ⇒ pure-text relevance, and every trust token below quietly no-ops. |
+| `sort:rank` / `sort:rank:asc` / `sort:followers` | Trust-order within match tiers. |
+| `sort:text` | Force pure-text relevance. |
+| `filter:rank:gte:N` / `filter:rank:gt:N` | Keep only authors the observer trusts ≥ N (0–100 scale). |
+| `include:spam` | Turn off the default trust floor that a trust-ranked query applies. |
+
+## What's searchable
+
+A search matches on the content and some tags of each event, and different fields
+carry different weight: a **primary** field (a title or name) outweighs a
+**secondary** field (a summary, description, or hashtags), which outweighs the
+**body** (the event's `content`). Profiles (kind 0) are split into their own
+name and identity fields. The matches are then ordered by your web of trust.
+
+The kinds we index and the fields it reads from each (highest weight first):
+
+| Kind(s) | What it is | Indexed fields |
+| --- | --- | --- |
+| **0** | profile | name, display name, about, NIP-05, lightning address, website |
+| **1** | note | subject, hashtags, content |
+| **11** | thread | title, content |
+| **30023** | long-form article | title, summary + hashtags, content |
+| **30818** | wiki article | title, summary, content |
+| **30402** | classified listing | title, summary, content |
+| **9802** | highlight | comment + context, content |
+| **20** | picture | title, content |
+| **21 / 22** | video | title, content |
+| **1063** | file | summary, content |
+| **2003** | torrent | title, content |
+| **31337** | audio track | subject |
+| **36787** | music track | title, artist + album, content |
+| **34139** | music playlist | title, description, content |
+| **54 / 10154** | podcast episode / show | title, description, content |
+| **30617** | git repository | name, description, content |
+| **1621 / 1618** | git issue / pull request | subject, content |
+| **1337** | code snippet | name, description, content |
+| **30311 / 1313** | live event / clip | title, summary, content |
+| **31924 / 31922 / 31923** | calendar & slots | title, summary, content |
+| **30312 / 30313** | meeting space / room | room or title, summary, content |
+| **34550** | community | name, description + rules, content |
+| **39000** | group | name, about |
+| **40 / 41** | public chat channel | name, about |
+| **31990** | app handler | name + display name, about |
+| **32267** | software application | name, summary, content |
+| **15128 / 35128** | website | title, description |
+| **30009** | badge | name, description, content |
+| **30030** | emoji pack | title, description, content |
+| **9041** | zap goal | summary, content |
+| **30000 / 39089** | people list / follow pack | title, description |
+| **10003 / 30001 / 30003** | bookmark lists | title, description |
+| **30015** | interest set | title, description + hashtags |
+| **30004 / 30005 / 30006 / 30063 / 30267** | article / video / picture / release / app curation sets | title, description |
+| **30002 / 39092 / 39701** | relay set / media starter pack / web bookmark | title, description |
+
+Dozens of other titled kinds (fundraisers, workouts, exercise templates, feeds,
+napplets, interactive stories, …) follow the same shape — a title or name as the
+primary field, the `content` as the body. Any remaining kind Quartz can parse is
+still indexed, by its full text content. The authoritative mapping is
+[`store/…/SearchExtractors.kt`](store/src/main/kotlin/com/vitorpamplona/sot/store/SearchExtractors.kt).
 
 ## Quick start
 
@@ -30,8 +128,7 @@ dependencies {
 }
 ```
 
-Released to Maven Central. For a commit snapshot, JitPack works too:
-`com.github.vitorpamplona.vespa-eventstore:store:<commit>`.
+Released to Maven Central.
 
 ```kotlin
 import com.vitorpamplona.quartz.eventstore.store.VespaEventStore
@@ -55,17 +152,8 @@ VespaEventStore.open("http://localhost:8080").use { store ->
 }
 ```
 
-### The NIP-50 search grammar
-
-Extensions travel inside the `search` string:
-
-| Token | Effect |
-|---|---|
-| `observer:<64-hex>` | Rank through this pubkey's web of trust. Absent ⇒ pure-text relevance, and every trust token below quietly no-ops. |
-| `sort:rank` / `sort:rank:asc` / `sort:followers` | Trust-order within match tiers. |
-| `sort:text` | Force pure-text relevance. |
-| `filter:rank:gte:N` / `filter:rank:gt:N` | Keep only authors the observer trusts ≥ N (0–100 scale). |
-| `include:spam` | Turn off the default trust floor that a trust-ranked query applies. |
+For a commit snapshot, JitPack works:
+`com.github.vitorpamplona.vespa-eventstore:store:<commit>`.
 
 ## Two things to know
 
