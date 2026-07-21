@@ -101,6 +101,13 @@ object EventStoreBenchmark {
             return
         }
 
+        // Throughput-vs-size curve: delta-ingest one prefix-stable corpus into
+        // both engines and measure at each checkpoint (see ScaleCurve).
+        if (System.getenv("BENCH_SCALE_CURVE") != null) {
+            ScaleCurve.run(vespaUrl, seed)
+            return
+        }
+
         // Bulk-ingest sweep: chunk size x parallel streams against a live Vespa
         // (see IngestSweep) — which knob raises the throttle-floor-bound ingest.
         if (System.getenv("BENCH_INGEST_SWEEP") != null) {
