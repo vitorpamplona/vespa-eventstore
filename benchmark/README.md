@@ -171,6 +171,62 @@ bench** — events/sec at rising client counts (same box, shared cores):
 
 Bulk list reads clear the 50k events/sec target by >2× at concurrency 32.
 
+## Scale study: 30k → 300k (10×) — the crossover starts moving
+
+One run at `BENCH_SIZE=300000` (same box, fresh engine, parity **127/127 on
+both engines at 300k**), read against the 30k numbers. The pattern is stark:
+**every SQLite advantage shrank, every Vespa advantage grew** — because
+SQLite's costs scale with the table while Vespa's are dominated by
+size-independent fixed costs at this range.
+
+**SQLite degradation, 30k → 300k (its own numbers):**
+
+| path | 30k | 300k | change |
+|---|---:|---:|---|
+| per-event `insert()` (at scale, memory) | 6,216 ev/s | 507 ev/s | **−12×** |
+| per-event `insert()` (at scale, disk) | 5,041 ev/s | 571 ev/s | **−9×** |
+| `batchInsert` (memory) | 6,912 ev/s | 1,238 ev/s | −5.6× |
+| author-timeline | 522 q/s | 69.9 q/s | **−7.5×** |
+| NIP-50 search (FTS5) | 51.5 q/s | 5.9 q/s | **−8.7×** |
+| count(reactions) | 5,637 q/s | 648 q/s | −8.7× |
+| id-lookup | 54,453 q/s | 35,888 q/s | −34% |
+| kind-scan / follow-feed | 1,733 / 27.9 | 1,702 / 25.4 | ~flat |
+
+(disk `batchInsert` stays ~36k ev/s — WAL amortization scales; the per-event
+admission SELECTs against a growing B-tree are what collapse.)
+
+**Vespa over the same growth: essentially flat.** Ingest 718 → **1,419 ev/s**
+(chunk-1000; size-independent), per-event insert 117 → 112 ev/s, duplicates
+311 → 372 ev/s, follow-feed 66.8 → 64.6 q/s, contact-sync 130 → 142,
+concurrent follow-feed **126k events/sec at conc 32** (higher than at 30k).
+The one real Vespa degradation is NIP-50 search, 81 → 20 q/s — ranking runs
+over a 10× match set — which **re-opens the two-phase ranking study**: its
+precondition ("a corpus large enough for the win to appear") is now met.
+
+**Head-to-head at 300k (single node):**
+
+| shape | SQLite (mem) | Real Vespa | winner |
+|---|---:|---:|---|
+| NIP-50 search | 5.9 | **20.4** | Vespa 3.5× |
+| follow-feed(a300) | 25.4 | **64.6** | Vespa 2.5× |
+| author-timeline | 69.9 | **152.9** | Vespa 2.2× |
+| contact-sync(a100) | 135.7 | 141.9 | even |
+| batch ingest (memory) | 1,238 | **1,419** | Vespa |
+| count(reactions) | 648 | 134 | SQLite (shrinking) |
+| tag-list(p100) | 286 | 87.5 | SQLite (shrinking) |
+| id-lookup / profile / kind-scan / ids-set | 35.9k / 42.9k / 1.7k / 919 | 470 / 369 / 76 / 143 | SQLite |
+
+Read: at 300k the Vespa store already wins **search, feeds, timelines, and
+sustained ingest** — the workloads a relay lives on — while SQLite keeps
+point lookups and flat scans (fixed-cost-bound on Vespa's side, still
+index-walk-cheap on SQLite's). Extrapolating the curves, more shapes flip by
+~1M. The practical crossover is therefore much earlier than "a few
+hundred-k events": **by 300k, a feed/search-serving relay is already better
+off on this store**; a pure key-value cache of events is not.
+
+`results-300k-reference.json` in this module is the machine-readable run
+(this box), usable with `compare_results.py` as a relative reference.
+
 ## Query-path optimizations (applied)
 
 Profiling the live Vespa (via `presentation.timing` and payload sizing) showed
