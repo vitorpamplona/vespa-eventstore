@@ -41,6 +41,14 @@
       <feeding>
         <concurrency>1.0</concurrency>
       </feeding>
+      <!-- One matching thread per query. A relay's load is MANY concurrent
+           queries, not one big query needing low latency; splitting a query
+           across cores would cut its latency but waste cores that another query
+           could be using, lowering total throughput. With 1 thread/query the
+           cores stay saturated with independent queries — the throughput-optimal
+           setting for concurrent serving (a latency-critical deployment would
+           raise it). -->
+      <numthreadspersearch>1</numthreadspersearch>
       <!-- The transaction log is a durability journal that is pruned once its
            contents are flushed to the persisted index. Its default flush
            trigger (maxtlssize) is 20 GiB, and for small events the in-memory

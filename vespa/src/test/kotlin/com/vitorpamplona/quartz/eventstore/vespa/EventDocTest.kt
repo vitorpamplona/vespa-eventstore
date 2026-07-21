@@ -22,6 +22,7 @@ package com.vitorpamplona.quartz.eventstore.vespa
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.doc.SearchFields
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -63,6 +64,19 @@ class EventDocTest {
     @Test
     fun `summary fields round-trip losslessly`() {
         assertEquals(doc, EventDoc.fromSummary(doc.indexFields()))
+    }
+
+    @Test
+    fun `summary parses an unsigned rumor whose empty sig Vespa omitted`() {
+        // A rumor (NIP-59 inner event / draft) is stored with sig == "". Real Vespa
+        // drops empty-string fields from query summaries, so the hit comes back with
+        // no `sig` key. fromSummary must default it to "" rather than throw and make
+        // the event vanish from search. (Simulate the omission by removing the key.)
+        val rumor = doc.copy(sig = "")
+        val served = JsonObject(rumor.indexFields().filterKeys { it != "sig" })
+        val back = EventDoc.fromSummary(served)
+        assertEquals("", back.sig)
+        assertEquals(rumor, back)
     }
 
     @Test

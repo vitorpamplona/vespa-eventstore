@@ -1,5 +1,9 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    // @Serializable DTOs for streaming the Vespa search/get response straight into
+    // typed objects (decodeFromString) instead of a full JsonElement tree — less
+    // garbage on the query hot path.
+    alias(libs.plugins.kotlin.serialization)
     // Publishes the test doubles (MockVespaEngine, InMemoryReputationIndex) in
     // src/testFixtures to downstream module tests.
     `java-test-fixtures`

@@ -34,7 +34,7 @@ class EventYqlTest {
     @Test
     fun `no constraints is a match-all ordered by recency`() {
         val q = EventYql.build(EventQuery())!!
-        assertEquals("select * from event where true order by created_at desc", q.yql)
+        assertEquals("select ${EventYql.SUMMARY_FIELDS} from event where true order by created_at desc", q.yql)
         assertEquals(EventYql.RANK_UNRANKED, q.ranking)
         assertTrue(q.params.isEmpty())
     }
@@ -53,7 +53,7 @@ class EventYqlTest {
                 ),
             )!!
         assertEquals(
-            "select * from event where kind in (0, 30382) and pubkey in (\"$hexA\") " +
+            "select ${EventYql.SUMMARY_FIELDS} from event where kind in (0, 30382) and pubkey in (\"$hexA\") " +
                 "and (tag_index contains \"p:$hexB\") and created_at >= 100 and created_at <= 200 " +
                 "order by created_at desc limit 50",
             q.yql,
@@ -63,7 +63,7 @@ class EventYqlTest {
     @Test
     fun `search words go out-of-band and switch the default ranking on`() {
         val q = EventYql.build(EventQuery(kinds = listOf(0), search = "vitor pamplona"))!!
-        assertTrue(q.yql.startsWith("select * from event where kind in (0) and ((("), q.yql)
+        assertTrue(q.yql.startsWith("select ${EventYql.SUMMARY_FIELDS} from event where kind in (0) and ((("), q.yql)
         assertEquals("vitor", q.params["w0"])
         assertEquals("pamplona", q.params["w1"])
         assertEquals("vitorpamplona", q.params["wj"], "two words get the joined-CamelCase variant")
@@ -142,7 +142,7 @@ class EventYqlTest {
     @Test
     fun `ranking override without a term is a trust-ordered match-all`() {
         val q = EventYql.build(EventQuery(ranking = EventYql.RANK_DESC, minRank = 2.0, observer = hexA))!!
-        assertEquals("select * from event where true", q.yql)
+        assertEquals("select ${EventYql.SUMMARY_FIELDS} from event where true", q.yql)
         assertEquals(EventYql.RANK_DESC, q.ranking)
         assertEquals("{$hexA:1.0}", q.params["ranking.features.query(user_q)"])
         assertEquals("2.0", q.params["ranking.features.query(min_rank)"])
@@ -162,7 +162,7 @@ class EventYqlTest {
     @Test
     fun `owners and expiry map to their attributes`() {
         val q = EventYql.build(EventQuery(owners = listOf(hexA), expiresBefore = 500))!!
-        assertEquals("select * from event where owner in (\"$hexA\") and expires_at < 500 order by created_at desc", q.yql)
+        assertEquals("select ${EventYql.SUMMARY_FIELDS} from event where owner in (\"$hexA\") and expires_at < 500 order by created_at desc", q.yql)
         assertNull(EventYql.build(EventQuery(owners = listOf("not-hex"))), "no valid owner")
     }
 
@@ -170,7 +170,7 @@ class EventYqlTest {
     fun `tagsAll requires every value`() {
         val q = EventYql.build(EventQuery(tagsAll = mapOf("t" to listOf("a", "b"))))!!
         assertEquals(
-            "select * from event where (tag_index contains \"t:a\" and tag_index contains \"t:b\") order by created_at desc",
+            "select ${EventYql.SUMMARY_FIELDS} from event where (tag_index contains \"t:a\" and tag_index contains \"t:b\") order by created_at desc",
             q.yql,
         )
     }
@@ -179,7 +179,7 @@ class EventYqlTest {
     fun `tag values are OR within a name and AND across names`() {
         val q = EventYql.build(EventQuery(tags = mapOf("p" to listOf(hexA, hexB), "t" to listOf("nostr"))))!!
         assertEquals(
-            "select * from event where (tag_index contains \"p:$hexA\" or tag_index contains \"p:$hexB\") " +
+            "select ${EventYql.SUMMARY_FIELDS} from event where (tag_index contains \"p:$hexA\" or tag_index contains \"p:$hexB\") " +
                 "and (tag_index contains \"t:nostr\") order by created_at desc",
             q.yql,
         )
@@ -188,7 +188,7 @@ class EventYqlTest {
     @Test
     fun `invalid hex entries are dropped but valid ones survive`() {
         val q = EventYql.build(EventQuery(ids = listOf("nope", hexA, hexA.uppercase())))!!
-        assertEquals("select * from event where id in (\"$hexA\") order by created_at desc", q.yql)
+        assertEquals("select ${EventYql.SUMMARY_FIELDS} from event where id in (\"$hexA\") order by created_at desc", q.yql)
     }
 
     @Test
@@ -205,7 +205,7 @@ class EventYqlTest {
     fun `caller-supplied strings cannot break out of their literal`() {
         val q = EventYql.build(EventQuery(tags = mapOf("t" to listOf("""x" or true or tag_index contains "y"""))))!!
         assertEquals(
-            "select * from event where (tag_index contains \"t:x\\\" or true or tag_index contains \\\"y\") " +
+            "select ${EventYql.SUMMARY_FIELDS} from event where (tag_index contains \"t:x\\\" or true or tag_index contains \\\"y\") " +
                 "order by created_at desc",
             q.yql,
         )

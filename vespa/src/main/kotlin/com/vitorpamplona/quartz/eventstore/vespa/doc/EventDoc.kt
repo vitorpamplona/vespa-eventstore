@@ -151,7 +151,11 @@ data class EventDoc(
                         .jsonArray
                         .map { tag -> tag.jsonArray.map { it.jsonPrimitive.content } },
                 content = fields["content"]?.jsonPrimitive?.content ?: "",
-                sig = fields.getValue("sig").jsonPrimitive.content,
+                // Tolerant like `content` above: Vespa OMITS empty-string fields from
+                // query summaries, so an unsigned rumor (sig == "") comes back with no
+                // `sig` key at all. getValue would throw and the hit would silently
+                // vanish from search results. Default to "" instead.
+                sig = fields["sig"]?.jsonPrimitive?.content ?: "",
                 owner = fields["owner"]?.jsonPrimitive?.content ?: pubkey,
                 search = SearchFields.fromFields { fields[it]?.jsonPrimitive?.content },
             )
