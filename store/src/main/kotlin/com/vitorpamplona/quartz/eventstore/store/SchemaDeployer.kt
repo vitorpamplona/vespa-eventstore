@@ -46,13 +46,38 @@ class SchemaDeployer(
 ) {
     /**
      * If no application is already serving at [queryUrl], deploy the bundled
-     * package. This is the "migrate on first run" path [VespaEventStore.open]
-     * takes: a fresh Vespa gets the schema; one that already serves an app is left
-     * untouched (a schema upgrade is an explicit [deploy], not a silent redeploy on
-     * every boot).
+     * package AND wait until it is actually serving. This is the "migrate on first
+     * run" path [VespaEventStore.open] takes: a fresh Vespa gets the schema; one
+     * that already serves an app is left untouched (a schema upgrade is an explicit
+     * [deploy], not a silent redeploy on every boot).
+     *
+     * The wait matters: `prepareandactivate` returns as soon as the config is
+     * activated, but Vespa's query/document container takes seconds more to start
+     * serving. Building the feed client before then fails its handshake — so [open]
+     * would hand back a store that can't talk to Vespa. [awaitServing] closes that gap.
      */
     fun deployIfAbsent(queryUrl: String) {
-        if (!isServing(queryUrl)) deploy()
+        if (isServing(queryUrl)) return
+        deploy()
+        awaitServing(queryUrl)
+    }
+
+    /**
+     * Block until an application is serving at [queryUrl] (or throw after [timeout]).
+     * Polls [isServing] — a fresh deploy needs a few seconds before the query
+     * container answers.
+     */
+    fun awaitServing(
+        queryUrl: String,
+        timeout: Duration = Duration.ofMinutes(2),
+        poll: Duration = Duration.ofSeconds(2),
+    ) {
+        val deadlineNanos = System.nanoTime() + timeout.toNanos()
+        while (true) {
+            if (isServing(queryUrl)) return
+            require(System.nanoTime() < deadlineNanos) { "Vespa at $queryUrl did not start serving within $timeout after deploy" }
+            Thread.sleep(poll.toMillis())
+        }
     }
 
     /** Whether an application is live at [queryUrl] (Vespa answers /ApplicationStatus with 200 once an app is active). */
