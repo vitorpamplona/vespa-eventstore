@@ -223,6 +223,48 @@ sets once per scan (was per-doc linear membership — a 300-author filter over a
 punishing exactly the list shapes under study, in the benchmark and in every
 store test that runs on the reference.
 
+## Latency tails (p50/p95/p99 — now on every row)
+
+Every suite records per-operation latency and prints the tail next to the
+throughput number. Two immediate findings on the 30k corpus:
+
+- **Single-stream tails are tight**: p99 runs 1.4–1.6× p50 across the query
+  shapes (follow-feed p50 14.4ms → p99 22.3ms) — no pathological outliers on
+  a quiet store.
+- **Concurrency buys throughput with queueing, and the tail pays**: at
+  concurrency 128 author-timeline reaches 1,892 q/s but p99 hits 117ms
+  (vs 41.5ms at concurrency 32 for only ~26% less throughput); kind-scan's
+  p99 reaches 448ms at 128. **For latency-sensitive serving the sweet spot on
+  this box is concurrency ~32–64** — beyond it, added clients mostly deepen
+  the queue. This is exactly the trade `numthreadspersearch=1` makes
+  (throughput over per-query latency), now visible per shape.
+
+## Bulk-ingest sweep (`BENCH_INGEST_SWEEP=1`) — chunk × streams
+
+Single-node ingest is throttle-floor-bound, so which knob raises it —
+bigger `batchInsert` chunks or more parallel streams? The grid (fresh
+id-band events per cell, real store stack, per-chunk commit tails):
+
+| chunk | 1 stream | 2 streams | 4 streams |
+|---:|---:|---:|---:|
+| 250 | 688 | 1,169 | 1,241 |
+| 500 | 1,294 | 1,704 | 1,573 |
+| 1000 | 1,719 | **1,868** | **1,947** |
+| 2000 | 1,642 | 1,665 | 1,865 |
+
+(events/sec; single 4-core node, shared with the client.)
+
+**Both knobs matter, and they compound: chunk 1000 × 2 streams ≈ 1,850–1,950
+events/sec — ~45% over the 500×1 default and 2.8× over small 250-event
+chunks.** The curve plateaus at ~1,900–2,000 (the engine/throttle ceiling on
+this box); 2,000-event chunks add nothing and double the per-chunk commit
+latency (p50 ~1.2s). Practical rule for syncers: **feed `batchInsert` in
+~1,000-event chunks from ~2 parallel streams**; going wider or larger only
+deepens latency. (Parallel streams are safe: the store's guard/plan reads
+overlap outside the writer lock, commits serialize behind it — and if the
+streams are split by owner, this is exactly the multi-lane ingest shape from
+docs/multi-node-consistency.md.)
+
 ## Mixed read/write load (`BENCH_MIXED=1`)
 
 A relay never serves REQs from a quiet store — queries arrive while syncs
