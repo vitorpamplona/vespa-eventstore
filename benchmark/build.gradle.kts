@@ -16,6 +16,20 @@ dependencies {
     implementation(libs.kotlinx.coroutines)
     // The corpus generator builds canonical event JSON with the JsonElement tree API.
     implementation(libs.kotlinx.serialization.json)
+
+    // VespaParityIT stands up a real Vespa in a container and runs the parity
+    // battery against it — the CI correctness gate. Skips when Docker is absent.
+    testImplementation(kotlin("test"))
+    testImplementation(libs.testcontainers)
+}
+
+tasks.test {
+    useJUnitPlatform {
+        // The Vespa integration test (VespaParityIT) stands up a container and is
+        // slow, so the default build stays unit-only. Run it with -Pintegration
+        // (the CI 'integration' job does); it self-skips without a Docker daemon.
+        if (!project.hasProperty("integration")) excludeTags("integration")
+    }
 }
 
 kotlin {
