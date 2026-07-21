@@ -610,15 +610,22 @@ SQLite bug to report upstream, not something to "fix" by breaking this store.
    ~89× fewer round-trips. Any syncer/relay path still calling `insert()` in a
    loop against Vespa is leaving ~16× on the table. Consider making the per-event
    `insert()` documentation warn against bulk use, or coalescing bursts.
-2. **Trim the per-event read fan-out (3.26 reads/event).** For *pure records*
-   (the common case — no kind 5/62 in the batch), the deletion and vanish probes
-   almost always come back empty. A per-owner bloom filter of "owners with any
-   tombstone/vanish" would let the store skip both probes for the vast majority
-   of events, cutting reads/event toward 1 (just the dup `get` + supersession).
-3. **Real-Vespa single-node ingest (635/s) is throttle-floor-bound**, not
-   engine-bound — the feed client's dynamic throttler idles at its `minInflight`
-   floor under bursty batched writes (see the comment in `VespaEventIndex`).
-   Larger batches, more connections, and multi-node raise it.
+2. **Trim the per-event read fan-out — DONE (`GuardOwners`).** The store now
+   tracks the owners with any stored tombstone/vanish (two grouping queries at
+   load, maintained on every guard written, self-disabling at the engine's
+   group cap) and skips both admission probes for everyone else; the bulk path
+   queries guards only for flagged owners. Measured: **reads/event 3.26 →
+   1.73** on the benchmark corpus (whose 4%-deletion mix flags many of its
+   400 authors — realistic deleter densities sit near 1.1), round-trips/event
+   4.26 → 2.80, parity 127/127. Single-stream insert latency is UNCHANGED
+   (counterbalanced A/B, all runs within 2%) — the probes ran concurrently
+   with the dup get, so this win is engine READ CAPACITY, not per-op latency:
+   it pays under concurrent load, exactly where the mixed bench showed reads
+   and writes fighting.
+3. **Real-Vespa single-node ingest is COMPUTE-bound, not throttle-bound**
+   (see the ingest stage profile above): the feed-window knobs are exhausted;
+   chunk ~1000 × 2 streams is this box's ceiling and the remaining levers are
+   topology (docs/scaling.md).
 
 ## BUG found while benchmarking — now fixed (correctness, real Vespa)
 

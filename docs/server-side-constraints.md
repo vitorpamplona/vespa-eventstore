@@ -117,7 +117,14 @@ The batch path already solved this problem for bulk ingest (chunked guard
 reads amortized across 500 events). These mechanisms matter for the
 *per-event* path — a relay accepting one EVENT at a time from a websocket —
 where the guard-read round trip is the latency floor. Order of value after
-measurement: GC selection (shipped, free) → docproc admission (the one lever
-that actually removes a client round trip; big project) → address-keyed
-replaceables (refactor, modest win). The test-and-set dup fold is measured
-out at single-node scale (table above).
+measurement: GC selection (shipped, free) → **guard-owner cache (SHIPPED —
+`GuardOwners`)**: the client-side realization of the docproc idea's read
+savings, skipping both admission probes for owners with no stored
+tombstone/vanish. Measured reads/event 3.26 → 1.73 (→ ~1.1 at realistic
+deleter densities) with single-stream latency unchanged — the win is engine
+read capacity under load. The docproc bundle remains the right tool when the
+goal is ENFORCEMENT for multi-feeder deployments (it is the only mechanism
+that guards writes this store never sees); as a pure performance lever it is
+now largely superseded. Address-keyed replaceables stay a refactor-scale
+option; the test-and-set dup fold is measured out at single-node scale
+(table above).
