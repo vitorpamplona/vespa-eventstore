@@ -1,0 +1,274 @@
+/*
+ * Copyright (c) 2026 Vitor Pamplona
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+ * Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+ * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+package com.vitorpamplona.quartz.eventstore.benchmark
+
+import com.vitorpamplona.quartz.nip01Core.core.Event
+import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import com.vitorpamplona.quartz.nip01Core.store.IEventStore
+import kotlinx.coroutines.runBlocking
+import java.io.File
+import kotlin.system.measureNanoTime
+
+/**
+ * Head-to-head event-store benchmark: Quartz's SQLite [IEventStore] versus this
+ * framework's Vespa-backed one, on an identical, reproducible corpus
+ * ([NostrCorpus]). It measures the two things the ask named — insertion and query
+ * speed — three ways:
+ *
+ *  1. INSERT throughput, per-event `insert()` and bulk `batchInsert()`.
+ *  2. QUERY throughput, over the shapes a relay actually serves (author timeline,
+ *     kind scan, tag mentions, id lookup, count, NIP-50 search).
+ *  3. Store-layer I/O AMPLIFICATION — engine round-trips per event for the
+ *     per-event vs the bulk path ([CountingEventIndex]). This is the number that
+ *     drives optimizing THIS framework, and it is engine-independent.
+ *
+ * Runnable with no external services (SQLite + the in-memory Vespa reference).
+ * Point `BENCH_VESPA_URL` at a running Vespa to fold in real engine numbers.
+ *
+ * Tunables (env): BENCH_SIZE (corpus events), BENCH_BATCH (batchInsert chunk),
+ * BENCH_QUERIES (reps per query shape), BENCH_REF_SIZE (cap for the O(n) in-memory
+ * reference so it doesn't run O(n^2)), BENCH_SEED.
+ */
+object EventStoreBenchmark {
+    private fun env(
+        key: String,
+        default: Int,
+    ) = System.getenv(key)?.toIntOrNull() ?: default
+
+    @JvmStatic
+    fun main(args: Array<String>) {
+        val size = env("BENCH_SIZE", 30_000)
+        val batch = env("BENCH_BATCH", 500)
+        val queries = env("BENCH_QUERIES", 2_000)
+        val refSize = env("BENCH_REF_SIZE", 8_000).coerceAtMost(size)
+        val seed = System.getenv("BENCH_SEED")?.toLongOrNull() ?: 42L
+        val vespaUrl = System.getenv("BENCH_VESPA_URL")
+
+        println("Generating corpus: size=$size authors≈${size / 20} seed=$seed ...")
+        val corpus = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed))
+        val refCorpus = corpus.take(refSize)
+        printMix(corpus)
+
+        // Query workload parameters sampled from the corpus (stable across backends).
+        val workload = Workload.from(corpus)
+
+        println("\n" + "=".repeat(72))
+        println("ROUND-TRIP AMPLIFICATION  (engine calls the store makes; engine-independent)")
+        println("=".repeat(72))
+        roundTripAnalysis(refCorpus, batch)
+
+        println("\n" + "=".repeat(72))
+        println("INSERT THROUGHPUT")
+        println("=".repeat(72))
+        Table.header()
+        // SQLite: the real embedded-DB numbers, the honest comparison point.
+        measureInserts("SQLite (memory)", corpus, batch) { Backends.sqliteMemory() }
+        val diskFile = File.createTempFile("bench-events", ".db").also { it.delete() }
+        try {
+            measureInserts("SQLite (disk)", corpus, batch) { Backends.sqliteDisk(diskFile.path) }
+        } finally {
+            diskFile.delete()
+            File(diskFile.path + "-wal").delete()
+            File(diskFile.path + "-shm").delete()
+        }
+        // Vespa reference engine (O(n) scans) — labelled, capped to refSize.
+        measureInserts("Vespa/InMemory ref* (n=$refSize)", refCorpus, batch) { Backends.vespaInMemory() }
+
+        println("\n" + "=".repeat(72))
+        println("QUERY THROUGHPUT  (store pre-loaded with the full corpus)")
+        println("=".repeat(72))
+        runQuerySuite("SQLite (memory)", corpus, workload, queries) { Backends.sqliteMemory() }
+        runQuerySuite("Vespa/InMemory ref* (n=$refSize)", refCorpus, Workload.from(refCorpus), queries / 4) { Backends.vespaInMemory() }
+
+        println("\n* Vespa/InMemory ref is the store over an O(n)-scan in-memory engine: a")
+        println("  correctness reference, NOT a throughput proxy for real Vespa. Read its")
+        println("  round-trip counts (above), not its wall-clock. Set BENCH_VESPA_URL for")
+        println("  real engine numbers.")
+
+        // Real Vespa: a shared external store, so it gets its own no-reinsertion flow.
+        if (vespaUrl != null) VespaRunner.run(vespaUrl, corpus, batch, queries, seed)
+    }
+
+    // ---- round-trip amplification ------------------------------------------
+
+    private fun roundTripAnalysis(
+        corpus: List<Event>,
+        batch: Int,
+    ) = runBlocking {
+        val (perEventStore, perEventCounter) = Backends.countingVespa()
+        for (e in corpus) runCatching { perEventStore.insert(e) }
+        perEventStore.close()
+
+        val (bulkStore, bulkCounter) = Backends.countingVespa()
+        corpus.chunked(batch).forEach { bulkStore.batchInsert(it) }
+        bulkStore.close()
+
+        val n = corpus.size.toDouble()
+        println("corpus for this section: ${corpus.size} events\n")
+        println(String.format("%-14s %12s %12s %12s %12s %12s", "path", "reads", "writes", "total", "rt/event", "reads/event"))
+        fun row(
+            name: String,
+            c: CountingEventIndex,
+        ) = println(
+            String.format(
+                "%-14s %12d %12d %12d %12.2f %12.2f",
+                name, c.reads(), c.writeCalls(), c.total(), c.total() / n, c.reads() / n,
+            ),
+        )
+        row("insert()", perEventCounter)
+        row("batchInsert()", bulkCounter)
+        val ratio = perEventCounter.total().toDouble() / bulkCounter.total().coerceAtLeast(1)
+        println(String.format("\nbulk path issues %.1fx fewer engine round-trips than per-event.", ratio))
+        println("(reads = get+search+count; writes = put/putAll+remove/removeAll invocations)")
+    }
+
+    // ---- insert throughput -------------------------------------------------
+
+    private fun measureInserts(
+        name: String,
+        corpus: List<Event>,
+        batch: Int,
+        factory: () -> IEventStore,
+    ) = runBlocking {
+        // Per-event insert().
+        val single = factory()
+        val singleNanos =
+            measureNanoTime {
+                runBlocking { for (e in corpus) runCatching { single.insert(e) } }
+            }
+        single.close()
+
+        // Bulk batchInsert().
+        val bulk = factory()
+        val bulkNanos =
+            measureNanoTime {
+                runBlocking { corpus.chunked(batch).forEach { bulk.batchInsert(it) } }
+            }
+        bulk.close()
+
+        Table.row("$name  insert()", corpus.size, singleNanos)
+        Table.row("$name  batchInsert($batch)", corpus.size, bulkNanos)
+    }
+
+    // ---- query throughput --------------------------------------------------
+
+    private fun runQuerySuite(
+        name: String,
+        corpus: List<Event>,
+        workload: Workload,
+        reps: Int,
+        factory: () -> IEventStore,
+    ) = runBlocking {
+        val store = factory()
+        corpus.chunked(1_000).forEach { store.batchInsert(it) }
+        println("\n-- $name (loaded ${corpus.size} events) --")
+        Table.queryHeader()
+
+        query("author-timeline", reps) { i -> store.query<Event>(Filter(authors = listOf(workload.author(i)), limit = 50)) }
+        query("kind-scan(notes)", reps) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)) }
+        query("tag-mentions(p)", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(workload.author(i))), limit = 50)) }
+        query("id-lookup", reps) { i -> store.query<Event>(Filter(ids = listOf(workload.id(i)))) }
+        query("profile(kind0)", reps) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(workload.author(i)), limit = 1)) }
+        query("count(reactions)", reps) { store.count(Filter(kinds = listOf(7))) }
+        query("nip50-search", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), search = workload.term(i), limit = 50)) }
+
+        store.close()
+    }
+
+    private inline fun query(
+        name: String,
+        reps: Int,
+        crossinline op: suspend (Int) -> Any?,
+    ) = runBlocking {
+        val warm = (reps / 10).coerceIn(1, 100)
+        repeat(warm) { runCatching { op(it) } }
+        var checksum = 0L
+        val nanos =
+            measureNanoTime {
+                runBlocking {
+                    repeat(reps) { i ->
+                        val r = runCatching { op(i) }.getOrNull()
+                        if (r is Collection<*>) checksum += r.size
+                    }
+                }
+            }
+        Table.queryRow(name, reps, nanos, checksum)
+    }
+
+    // ---- helpers -----------------------------------------------------------
+
+    /** Sampled, stable query parameters drawn from the corpus. */
+    private class Workload(
+        private val authors: List<String>,
+        private val ids: List<String>,
+        private val terms: List<String>,
+    ) {
+        fun author(i: Int) = authors[i % authors.size]
+
+        fun id(i: Int) = ids[i % ids.size]
+
+        fun term(i: Int) = terms[i % terms.size]
+
+        companion object {
+            fun from(corpus: List<Event>): Workload {
+                val authors = corpus.map { it.pubKey }.distinct().shuffled(kotlin.random.Random(1)).take(500)
+                val ids = corpus.map { it.id }.shuffled(kotlin.random.Random(2)).take(500)
+                val terms = "nostr bitcoin coffee freedom relay privacy vespa trust".split(" ")
+                return Workload(authors.ifEmpty { listOf("a".repeat(64)) }, ids.ifEmpty { listOf("0".repeat(64)) }, terms)
+            }
+        }
+    }
+
+    private fun printMix(corpus: List<Event>) {
+        val byKind = corpus.groupingBy { it.kind }.eachCount().toSortedMap()
+        println("kind mix: " + byKind.entries.joinToString("  ") { "${it.key}:${it.value}" })
+    }
+
+    /** Small aligned table printer. */
+    private object Table {
+        fun header() = println(String.format("%-42s %12s %14s %12s", "operation", "events", "events/sec", "µs/event"))
+
+        fun row(
+            name: String,
+            events: Int,
+            nanos: Long,
+        ) {
+            val secs = nanos / 1e9
+            val perSec = events / secs
+            val microsEach = nanos / 1000.0 / events
+            println(String.format("%-42s %12d %14s %12.2f", name, events, fmt(perSec), microsEach))
+        }
+
+        fun queryHeader() = println(String.format("%-20s %10s %14s %12s %10s", "query", "reps", "queries/sec", "µs/query", "Σresults"))
+
+        fun queryRow(
+            name: String,
+            reps: Int,
+            nanos: Long,
+            checksum: Long,
+        ) {
+            val secs = nanos / 1e9
+            println(String.format("%-20s %10d %14s %12.2f %10d", name, reps, fmt(reps / secs), nanos / 1000.0 / reps, checksum))
+        }
+
+        private fun fmt(v: Double) = if (v >= 1000) String.format("%,d", v.toLong()) else String.format("%.1f", v)
+    }
+}
