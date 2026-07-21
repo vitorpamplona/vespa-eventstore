@@ -94,6 +94,7 @@ object ThroughputBench {
                         lat.summary(),
                     ),
                 )
+                BenchResults.record("$name@$c", lat, "events_per_sec" to eps, "qps" to qps, "bytes_per_event" to bytesPerEvent.toDouble())
             }
         }
     }

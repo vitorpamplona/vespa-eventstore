@@ -39,3 +39,10 @@ kotlin {
 application {
     mainClass.set("com.vitorpamplona.quartz.eventstore.benchmark.EventStoreBenchmark")
 }
+
+// Large corpora need heap: a BENCH_SIZE=1M run holds the generated Event list
+// (~2 GB) plus the SQLite stores' native memory. BENCH_HEAP sets -Xmx for the
+// benchmark JVM (default 2g keeps the everyday 30k run lean).
+tasks.named<JavaExec>("run") {
+    maxHeapSize = System.getenv("BENCH_HEAP") ?: "2g"
+}

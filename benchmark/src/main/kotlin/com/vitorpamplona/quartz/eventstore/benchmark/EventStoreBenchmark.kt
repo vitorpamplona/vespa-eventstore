@@ -58,6 +58,26 @@ object EventStoreBenchmark {
         val size = env("BENCH_SIZE", 30_000)
         val batch = env("BENCH_BATCH", 500)
         val queries = env("BENCH_QUERIES", 2_000)
+        try {
+            run(size, batch, queries)
+        } finally {
+            // Machine-readable results (BENCH_JSON=path): the regression baseline.
+            BenchResults.writeIfRequested(
+                mapOf(
+                    "size" to size.toString(),
+                    "batch" to batch.toString(),
+                    "queries" to queries.toString(),
+                    "seed" to (System.getenv("BENCH_SEED") ?: "42"),
+                ),
+            )
+        }
+    }
+
+    private fun run(
+        size: Int,
+        batch: Int,
+        queries: Int,
+    ) {
         val refSize = env("BENCH_REF_SIZE", 8_000).coerceAtMost(size)
         val seed = System.getenv("BENCH_SEED")?.toLongOrNull() ?: 42L
         val vespaUrl = System.getenv("BENCH_VESPA_URL")
@@ -190,17 +210,20 @@ object EventStoreBenchmark {
         fun row(
             name: String,
             c: CountingEventIndex,
-        ) = println(
-            String.format(
-                "%-14s %12d %12d %12d %12.2f %12.2f",
-                name,
-                c.reads(),
-                c.writeCalls(),
-                c.total(),
-                c.total() / n,
-                c.reads() / n,
-            ),
-        )
+        ) {
+            println(
+                String.format(
+                    "%-14s %12d %12d %12d %12.2f %12.2f",
+                    name,
+                    c.reads(),
+                    c.writeCalls(),
+                    c.total(),
+                    c.total() / n,
+                    c.reads() / n,
+                ),
+            )
+            BenchResults.record("round-trips $name", "rt_per_event" to c.total() / n, "reads_per_event" to c.reads() / n)
+        }
         row("insert()", perEventCounter)
         row("batchInsert()", bulkCounter)
         val ratio = perEventCounter.total().toDouble() / bulkCounter.total().coerceAtLeast(1)
@@ -248,6 +271,7 @@ object EventStoreBenchmark {
         val store = factory()
         corpus.chunked(1_000).forEach { store.batchInsert(it) }
         println("\n-- $name (loaded ${corpus.size} events) --")
+        BenchResults.section(name)
         Table.queryHeader()
 
         query("author-timeline", reps) { i -> store.query<Event>(Filter(authors = listOf(workload.author(i)), limit = 50)) }
@@ -313,6 +337,7 @@ object EventStoreBenchmark {
             val perSec = events / secs
             val microsEach = nanos / 1000.0 / events
             println(String.format("%-42s %12d %14s %12.2f", name, events, fmt(perSec), microsEach))
+            BenchResults.record(name, "events_per_sec" to perSec)
         }
 
         fun queryHeader() = println(String.format("%-20s %10s %14s %12s %10s  %s", "query", "reps", "queries/sec", "µs/query", "Σresults", "latency tail"))
@@ -326,6 +351,7 @@ object EventStoreBenchmark {
         ) {
             val secs = nanos / 1e9
             println(String.format("%-20s %10d %14s %12.2f %10d  %s", name, reps, fmt(reps / secs), nanos / 1000.0 / reps, checksum, lat.summary()))
+            BenchResults.record(name, lat, "qps" to reps / secs, "sum_results" to checksum.toDouble())
         }
 
         private fun fmt(v: Double) = if (v >= 1000) String.format("%,d", v.toLong()) else String.format("%.1f", v)

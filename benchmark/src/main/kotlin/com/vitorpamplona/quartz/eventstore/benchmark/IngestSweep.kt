@@ -94,6 +94,7 @@ object IngestSweep {
                             lat.summary(),
                         ),
                     )
+                    BenchResults.record("chunk$chunk x$streams", lat, "events_per_sec" to written.get() / secs)
                 }
             }
         }

@@ -61,6 +61,7 @@ object VespaRunner {
 
         val store: IEventStore = VespaEventStore.open(url)
         try {
+            BenchResults.section("vespa")
             awaitServing(store)
 
             // --- bulk ingest (the path the framework is built around) ---
@@ -175,6 +176,7 @@ object VespaRunner {
             }
         val secs = nanos / 1e9
         println(String.format("%-20s %10d %14s %12.2f %10d  %s", name, reps, num(reps / secs), nanos / 1000.0 / reps, checksum, lat.summary()))
+        BenchResults.record(name, lat, "qps" to reps / secs, "sum_results" to checksum.toDouble())
     }
 
     private fun report(
@@ -184,6 +186,7 @@ object VespaRunner {
     ) {
         val secs = nanos / 1e9
         println(String.format("%-24s %10d events  %14s events/sec  %10.1f µs/event", op, events, num(events / secs), nanos / 1000.0 / events))
+        BenchResults.record(op, "events_per_sec" to events / secs)
     }
 
     private object Header {

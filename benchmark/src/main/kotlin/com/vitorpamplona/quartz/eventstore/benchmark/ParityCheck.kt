@@ -101,6 +101,7 @@ object ParityCheck {
     ): Boolean {
         val status = if (result.ok) "PASS" else "FAIL"
         println("[$status] parity $candidateName vs $referenceName: ${result.checks - result.mismatches.size}/${result.checks} checks agree")
+        BenchResults.record("parity $candidateName vs $referenceName", "checks" to result.checks.toDouble(), "mismatches" to result.mismatches.size.toDouble())
         result.mismatches.take(40).forEach { println("   ✗ $it") }
         if (result.mismatches.size > 40) println("   … ${result.mismatches.size - 40} more")
         return result.ok

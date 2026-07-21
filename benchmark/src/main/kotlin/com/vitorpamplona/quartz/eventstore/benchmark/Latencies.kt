@@ -49,6 +49,13 @@ class Latencies {
     @Synchronized
     private fun sorted(): LongArray = samples.toLongArray().also { it.sort() }
 
+    /** The [q] percentile in nanos, or null with no samples (for the JSON results). */
+    fun percentileNanos(q: Double): Long? {
+        val s = sorted()
+        if (s.isEmpty()) return null
+        return s[((s.size - 1) * q).toInt()]
+    }
+
     /** "p50=1.2ms p95=3.4ms p99=9.9ms" (or "-" with no samples). */
     fun summary(): String {
         val s = sorted()

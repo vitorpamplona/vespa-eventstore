@@ -131,6 +131,13 @@ object MixedLoadBench {
                         queryLat.summary(),
                     ),
                 )
+                BenchResults.record(
+                    "mixed $label",
+                    queryLat,
+                    "ingest_events_per_sec" to written.get() / secs,
+                    "query_qps" to queries.get() / secs,
+                    "query_events_per_sec" to hits.get() / secs,
+                )
             }
 
             // Short warmup so JIT/connections settle before any baseline.

@@ -62,5 +62,6 @@ object InsertProbe {
     ) {
         val secs = nanos / 1e9
         println(String.format("%-16s %6d/%d %12.1f events/sec %10.1f µs/event  %s", op, counted, total, total / secs, nanos / 1000.0 / total, lat.summary()))
+        BenchResults.record(op, lat, "events_per_sec" to total / secs)
     }
 }
