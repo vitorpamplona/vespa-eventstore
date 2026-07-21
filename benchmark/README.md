@@ -129,7 +129,47 @@ scale — and that is the workload the Vespa store exists to do *better*, by
 ranking, once trust data and scale enter the picture.
 
 Practical read: **don't reach for Vespa until you outgrow SQLite.** Below a few
-hundred-k events on one box, Quartz's SQLite store is faster and simpler.
+hundred-k events on one box, Quartz's SQLite store is faster and simpler —
+**except for list-shaped filters (next section), where Vespa already wins.**
+
+### 3b. List-shaped REQs — where Vespa beats SQLite head-on
+
+Every query above uses a single-value filter, but real relay traffic is
+dominated by **list-shaped** REQs: a follow-feed carries the observer's whole
+contact list as `authors`, a thread fetch carries dozens of `ids`, a
+notification subscription carries a wide `#p` value list. The suites (latency,
+real-Vespa, concurrent, parity) all run four such shapes, drawn from a shared
+`BenchWorkload` whose value windows rotate per rep so no single hot list is
+re-served from cache:
+
+| query (per rep) | SQLite (mem) q/s | Real Vespa (1 node) q/s |
+|---|---:|---:|
+| follow-feed — 300 authors, kinds 1/6/7, limit 500 | 27.9 | **66.8** |
+| contact-sync — 100 authors, kinds 0/3/10002, limit 300 | **161** | 138 |
+| tag-list — `#p` ×100, kinds 1/7, limit 300 | **331** | 101 |
+| ids-set — 100 ids | **1,376** | 182 |
+
+(4-core box, client and Vespa sharing cores, 30k corpus, seed 42 — same-run
+pairs, so compare across the row, not against the earlier tables.)
+
+**The follow-feed — THE relay workload, every connected client holds one open —
+is the first shape where this store beats in-process SQLite outright (2.4×) at
+30k events on a single node.** A 300-author `IN` plus a kind list plus
+newest-first is exactly what an inverted index with fast-search attributes is
+built for, while SQLite falls off its point-lookup cliff (52k q/s single-author
+→ 28 q/s at 300 authors, a ~2,000× drop). The id-set and tag-list shapes stay
+with SQLite at this corpus size (no network hop), same as the point lookups.
+
+Under concurrency the follow-feed is the **fastest bulk shape in the whole
+bench** — events/sec at rising client counts (same box, shared cores):
+
+| query (events/query) | conc 1 | conc 32 | conc 128 | bytes/event |
+|---|---:|---:|---:|---:|
+| follow-feed(a300) (500) | 35,255 | **116,951** | 101,443 | ~5,900 |
+| kind-scan (200) | 26,652 | 90,080 | 89,493 | ~4,700 |
+| ids-set(100) (100) | 18,555 | 67,926 | 70,854 | ~7,900 |
+
+Bulk list reads clear the 50k events/sec target by >2× at concurrency 32.
 
 ## Query-path optimizations (applied)
 
@@ -152,10 +192,36 @@ much), so only structural changes are reliably attributable. Two landed:
    so the bulk-insert dedup preload (500-id chunks) stays on the single-search
    path and **ingest is unaffected**.
 
-Both are gated by the parity harness (119/119) and the vespa test suite (39/39).
-Measured id-lookup gain: **+34–65 %** across runs. Server-side matching and the
-NIP-50 ranking cost are inherent to the engine and were left alone (search
-relevance is a feature, not overhead to cut).
+3. **Multi-value tag lists compile to the `in` operator** (`EventYql`): a NIP-01
+   tag filter with N values used to build an OR-chain of `tag_index contains`;
+   it now builds `tag_index in ("p:a", "p:b", …)`. `tag_index` is a fast-search
+   attribute, so `in` resolves the whole list through one dictionary-backed
+   iterator where the OR tree paid a per-term iterator plus the merge. A/B on
+   the live corpus (same values, both forms, identical hit counts — semantics
+   are equal; `MockYql` parses the new grammar so the wire tests still pin it):
+
+   | `#p` values | or-chain ms | `in` ms | speedup |
+   |---:|---:|---:|---:|
+   | 10 | 6.6 | 5.6 | 1.17× |
+   | 50 | 12.6 | 9.8 | 1.29× |
+   | 100 | 13.2 | 10.7 | 1.23× |
+   | 200 | 24.7 | 10.6 | **2.32×** |
+
+   The `in` form is essentially flat in list width; the OR-chain grows
+   linearly. Single values and `tagsAll` (AND semantics — no `in` form) keep
+   `contains`.
+
+Everything is gated by the parity harness (now **125/125**, including the
+list-shaped specs) and the vespa test suite. Measured id-lookup gain from (2):
+**+34–65 %** across runs. Server-side matching and the NIP-50 ranking cost are
+inherent to the engine and were left alone (search relevance is a feature, not
+overhead to cut).
+
+The in-memory reference engine also compiles a query's list constraints to hash
+sets once per scan (was per-doc linear membership — a 300-author filter over a
+30k corpus was ~9M string compares per query). Same semantics; it just stops
+punishing exactly the list shapes under study, in the benchmark and in every
+store test that runs on the reference.
 
 ## Concurrent throughput and GC (`BENCH_THROUGHPUT=1`)
 
@@ -236,7 +302,7 @@ the full NIP-09/40/62 semantics suite, still pass.
 this keeps cores saturated with *independent* queries instead of splitting one
 query across cores. Measured: bulk throughput ~66k → ~76k events/sec and it kept
 scaling to concurrency 128 instead of plateauing. Config-only, so results/parity
-are unchanged (still 119/119). A latency-critical (few big queries) deployment
+are unchanged. A latency-critical (few big queries) deployment
 would raise it instead.
 
 ### NIP-50 search: two-phase ranking studied, not shipped
@@ -269,14 +335,15 @@ The benchmark is also a **correctness gate**: `ParityCheck` loads the identical
 corpus into Quartz's SQLite store and this store, then asserts they return the
 **same event ids, in the same newest-first order, with the same counts** across a
 battery of NIP-01 filters (kind scans, author timelines, id sets, `#p`/`#e` tags,
-`since`/`until` windows, replaceable/deletion effects). The corpus advances
+`since`/`until` windows, replaceable/deletion effects, and the list-shaped
+follow-feed / id-set / wide-tag filters). The corpus advances
 `created_at` by a positive step per event, so timestamps are distinct and the
 newest-first order is a total order — the comparison is exact, not best-effort.
 It runs SQLite ↔ in-memory reference always, and SQLite ↔ **real Vespa** when
 `BENCH_VESPA_URL` is set. NIP-50 `search` is excluded (relevance ordering is
 engine-defined; FTS5 and BM25 legitimately differ).
 
-Current status: **119/119 checks agree** across SQLite, the in-memory reference,
+Current status: **125/125 checks agree** across SQLite, the in-memory reference,
 and real Vespa.
 
 ### A NIP-09 divergence the parity gate surfaced
