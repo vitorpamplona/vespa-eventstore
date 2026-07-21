@@ -91,28 +91,138 @@ Extensions travel inside the `search` string:
 - **`:store`** — Quartz `IEventStore` semantics, the trust projection, and the
   `VespaEventStore.open` front door.
 
-## Build
+## Developer Setup
 
-```bash
-./gradlew build     # compile + tests + spotlessCheck
-```
+Make sure to have the following pre-requisites installed:
+1. Java 21+ (JDK 21)
+2. IntelliJ IDEA CE or Android Studio
 
 Kotlin 2.4 / JDK 21. Quartz comes from JitPack, pinned by commit in
 `gradle/libs.versions.toml`.
 
-## Releasing
+On first build the project installs the repo's git hooks (`.git-hooks` →
+`.git/hooks`) so [Spotless](https://github.com/diffplug/spotless) runs on commit
+and the tests run on push, mirroring Amethyst.
+
+## Building
+
+Build the library (compile + tests + `spotlessCheck`):
+```bash
+./gradlew build
+```
+
+Fix formatting the linter flags:
+```bash
+./gradlew spotlessApply
+```
+
+## Testing
+
+Run the full test suite:
+```bash
+./gradlew test
+```
+
+The `:vespa` testFixtures (`InMemoryEventIndex`, `MockVespaEngine`) let the tests
+run with no Vespa instance up, so `./gradlew test` needs nothing external.
+
+## Publishing
 
 Publishing uses the [vanniktech Maven Publish](https://github.com/vanniktech/gradle-maven-publish-plugin)
 plugin (the same one Quartz ships to Central with).
 
+Install GnuPG and generate a key:
+
+```bash
+gpg --gen-key
+```
+
+Run `gpg --list-keys` to show your GPG keys.
+
+Distribute the public key:
+
+```bash
+gpg --keyserver keyserver.ubuntu.com --send-keys <pubkey>
+```
+
+Export your private key to a file:
+
+```bash
+gpg --export-secret-keys > ~/.gnupg/secring.gpg
+```
+
+Generate a User Token on Maven Central.
+
+To publish from local, add the following fields to your `~/.gradle/gradle.properties` file:
+
+```properties
+mavenCentralUsername=<maven user>
+mavenCentralPassword=<maven password>
+signing.keyId=<gpg key id>
+signing.password=<gpg key passphrase>
+signing.secretKeyRingFile=<yourhome>/.gnupg/secring.gpg
+```
+
+Then run:
+
+```bash
+./gradlew publishAllPublicationsToMavenCentral --no-configuration-cache
+```
+
+To publish from GitHub Actions, export your private key as a base64 string:
+
+```bash
+gpg --export-secret-keys --armor <key-id> ~/.gnupg/secring.gpg | grep -v '\-\-' | grep -v '^=.' | tr -d '\n'
+```
+
+and add the following secrets to your GitHub secrets:
+
+```properties
+SONATYPE_USERNAME=<maven user>
+SONATYPE_PASSWORD=<maven password>
+SIGNING_PRIVATE_KEY=<base64versionOfTheFile>
+SIGNING_PASSWORD=<gpg key passphrase>
+```
+
 - **CI** (`.github/workflows/build.yml`) runs `./gradlew build` on every push and PR to `main`.
 - **Release** (`.github/workflows/create-release.yml`) publishes to Maven Central on a
-  `v*` tag via `./gradlew publishAllPublicationsToMavenCentral`. It needs four repo secrets:
-  `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `SIGNING_PRIVATE_KEY` (armored GPG key),
-  `SIGNING_PASSWORD`.
+  `v*` tag via `./gradlew publishAllPublicationsToMavenCentral`.
 
-Bump the version in `gradle/libs.versions.toml` (`app`), tag `vX.Y.Z`, and push the tag.
+Bump the version in `gradle/libs.versions.toml` (`app`), then just tag the release
+version starting with `v` (`vX.Y.Z`) and push the tag.
 
-## License
+## Contributing
 
-MIT © Vitor Pamplona
+Issues can be logged on [GitHub issues](https://github.com/vitorpamplona/vespa-eventstore/issues). [Pull requests](https://github.com/vitorpamplona/vespa-eventstore/pulls) are very welcome.
+
+By contributing to this repository, you agree to license your work under the MIT license. Any work contributed where you are not the original author must contain its license header with the original author(s) and source.
+
+# Contributors
+
+<a align="center" href="https://github.com/vitorpamplona/vespa-eventstore/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=vitorpamplona/vespa-eventstore" />
+</a>
+
+# MIT License
+
+<pre>
+Copyright (c) 2026 Vitor Pamplona
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre>
