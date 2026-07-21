@@ -66,6 +66,15 @@ object VespaRunner {
             delay(1_000)
             println("store now reports count(all) ≈ ${runCatching { store.count(Filter()) }.getOrDefault(-1)}")
 
+            // Correctness gate the user asked for: real Vespa must answer every
+            // NIP-01 filter exactly as Quartz's SQLite store does. Load a SQLite
+            // store with the SAME corpus in-process and diff every result set.
+            println("\n-- parity: real Vespa vs SQLite (NIP-01 correctness) --")
+            val sqlite = Backends.sqliteMemory()
+            corpus.chunked(1_000).forEach { sqlite.batchInsert(it) }
+            ParityCheck.report("Vespa", "SQLite", ParityCheck.run(corpus, "SQLite", sqlite, "Vespa", store))
+            sqlite.close()
+
             // --- queries over the loaded corpus ---
             println("\n-- queries (BM25 search is real here, not a substring scan) --")
             val w = workloadFrom(corpus)

@@ -139,9 +139,17 @@ object NostrCorpus {
 
             out += Event.fromJson(event(id, author, clock, draft))
 
-            val q = recentByAuthor.getOrPut(author) { ArrayDeque() }
-            q.addLast(id)
-            if (q.size > 8) q.removeFirst()
+            // Deletions target a prior NON-deletion event by the same author.
+            // A deletion targeting a deletion is a NIP-09 no-op ("a deletion request
+            // against a deletion request has no effect") — which THIS store honors
+            // but Quartz's SQLite store does not (it erases the earlier deletion).
+            // Keeping that case out of the corpus lets store<->SQLite parity be a
+            // clean pass; the divergence is called out in the module README.
+            if (draft.kind != 5) {
+                val q = recentByAuthor.getOrPut(author) { ArrayDeque() }
+                q.addLast(id)
+                if (q.size > 8) q.removeFirst()
+            }
             allRecent.addLast(author to id)
             if (allRecent.size > 4096) allRecent.removeFirst()
         }

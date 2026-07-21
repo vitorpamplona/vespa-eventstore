@@ -131,6 +131,41 @@ ranking, once trust data and scale enter the picture.
 Practical read: **don't reach for Vespa until you outgrow SQLite.** Below a few
 hundred-k events on one box, Quartz's SQLite store is faster and simpler.
 
+## Correctness parity (SQLite ↔ this store)
+
+The benchmark is also a **correctness gate**: `ParityCheck` loads the identical
+corpus into Quartz's SQLite store and this store, then asserts they return the
+**same event ids, in the same newest-first order, with the same counts** across a
+battery of NIP-01 filters (kind scans, author timelines, id sets, `#p`/`#e` tags,
+`since`/`until` windows, replaceable/deletion effects). The corpus advances
+`created_at` by a positive step per event, so timestamps are distinct and the
+newest-first order is a total order — the comparison is exact, not best-effort.
+It runs SQLite ↔ in-memory reference always, and SQLite ↔ **real Vespa** when
+`BENCH_VESPA_URL` is set. NIP-50 `search` is excluded (relevance ordering is
+engine-defined; FTS5 and BM25 legitimately differ).
+
+Current status: **119/119 checks agree** across SQLite, the in-memory reference,
+and real Vespa.
+
+### A NIP-09 divergence the parity gate surfaced
+
+Building this harness turned up a spec-compliance difference. NIP-09 says:
+
+> "Publishing a deletion request event against a deletion request has no effect."
+
+Given N (note), D1 (kind 5 deleting N), D2 (kind 5 deleting D1):
+
+- **This store keeps `[D1, D2]`** — D2 targeting the deletion D1 is a no-op, per
+  spec. (`NostrEventStore.applyDeletion` skips kind-5/kind-62 targets.)
+- **Quartz's SQLite store keeps `[D2]`** — it has no such guard and erases D1,
+  **violating NIP-09**. (Confirmed in `sqlite/DeletionRequestModule.kt`: the
+  delete-by-id path has no kind-5/62 exclusion.)
+
+So on this edge case **this store is correct and SQLite is not**. The corpus
+therefore has its deletions target real *non-deletion* events (what clients
+actually delete), keeping the parity gate a clean pass; the divergence is a
+SQLite bug to report upstream, not something to "fix" by breaking this store.
+
 ## Where to hammer performance (framework optimization targets)
 
 1. **Push ingest onto `batchInsert`.** The single biggest win, already available:

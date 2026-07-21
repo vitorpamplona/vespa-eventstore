@@ -103,8 +103,31 @@ object EventStoreBenchmark {
         println("  round-trip counts (above), not its wall-clock. Set BENCH_VESPA_URL for")
         println("  real engine numbers.")
 
+        // Correctness gate: SQLite and the store must agree on every NIP-01 filter.
+        println("\n" + "=".repeat(72))
+        println("PARITY  (identical NIP-01 answers — correctness gate)")
+        println("=".repeat(72))
+        parity("Vespa/InMemory", Backends.vespaInMemory(), refCorpus)
+
         // Real Vespa: a shared external store, so it gets its own no-reinsertion flow.
         if (vespaUrl != null) VespaRunner.run(vespaUrl, corpus, batch, queries, seed)
+    }
+
+    /** Load [corpus] into a fresh SQLite store and [candidate], then assert identical NIP-01 answers. */
+    private fun parity(
+        candidateName: String,
+        candidate: IEventStore,
+        corpus: List<Event>,
+    ) = runBlocking {
+        val sqlite = Backends.sqliteMemory()
+        corpus.chunked(1_000).forEach {
+            sqlite.batchInsert(it)
+            candidate.batchInsert(it)
+        }
+        val result = ParityCheck.run(corpus, "SQLite", sqlite, candidateName, candidate)
+        ParityCheck.report(candidateName, "SQLite", result)
+        sqlite.close()
+        candidate.close()
     }
 
     // ---- round-trip amplification ------------------------------------------
