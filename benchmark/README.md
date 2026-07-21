@@ -147,23 +147,20 @@ hundred-k events on one box, Quartz's SQLite store is faster and simpler.
    floor under bursty batched writes (see the comment in `VespaEventIndex`).
    Larger batches, more connections, and multi-node raise it.
 
-## BUG found while benchmarking (correctness, real Vespa)
+## BUG found while benchmarking — now fixed (correctness, real Vespa)
 
-`EventDoc.fromSummary` reads `fields.getValue("sig")`, which **throws** when
-`sig` is absent. Real Vespa **omits empty-string fields from query summaries**, so
-any stored event with `sig == ""` — i.e. **every unsigned rumor**, which this
-store is explicitly designed to hold (NIP-59 inner events, drafts) — comes back
-from `search()` as a dropped hit, and the query returns *nothing*. `count()`
-(grouping) is unaffected, which masks it. `MockVespaEngine` never caught this
+`EventDoc.fromSummary` read `fields.getValue("sig")`, which **throws** when `sig`
+is absent. Real Vespa **omits empty-string fields from query summaries**, so any
+stored event with `sig == ""` — i.e. **every unsigned rumor**, which this store is
+explicitly designed to hold (NIP-59 inner events, drafts) — came back from
+`search()` as a dropped hit, and the query returned *nothing*. `count()`
+(grouping) is unaffected, which masked it. `MockVespaEngine` never caught this
 because it echoes empty fields back verbatim; only a real Vespa omits them.
 
-One-line fix (make `sig` tolerant like `content`/`owner` already are):
-
-```kotlin
-// EventDoc.fromSummary
-sig = fields["sig"]?.jsonPrimitive?.content ?: "",
-```
+**Fixed** in this branch — `sig` is now tolerant like `content`/`owner` already
+were (`fields["sig"]?.jsonPrimitive?.content ?: ""`), with a regression test in
+`EventDocTest` that reconstructs a rumor whose empty `sig` the summary dropped.
 
 The corpus here signs its events (128-hex fake signature) so the benchmark
-measures the common signed path; the fix above is what makes *rumor* queries work
+measures the common signed path; the fix is what makes *rumor* queries work
 against real Vespa.
