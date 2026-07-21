@@ -125,11 +125,11 @@ Vespa is a prerequisite, like a database — stand one up, then point the store 
 
 ```kotlin
 dependencies {
-    implementation("com.vitorpamplona.quartz.eventstore:store:0.1.0")
+    implementation("com.vitorpamplona.quartz.eventstore:store:1.0.0")
 
     // Optional: in-memory test doubles (InMemoryEventIndex, MockVespaEngine),
     // so your own tests run with no Vespa instance.
-    testImplementation(testFixtures("com.vitorpamplona.quartz.eventstore:vespa:0.1.0"))
+    testImplementation(testFixtures("com.vitorpamplona.quartz.eventstore:vespa:1.0.0"))
 }
 ```
 
