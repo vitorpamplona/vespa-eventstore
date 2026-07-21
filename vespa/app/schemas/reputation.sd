@@ -13,9 +13,9 @@
 # Tensor shapes follow Brainstorm (brainstorm_server app/core/vespa.py):
 #   influence_scores{observer}  = rank (influence*100, 0..100), int8
 #   follower_counts{observer} = verified-follower count, float
-schema profile {
+schema reputation {
 
-    document profile {
+    document reputation {
 
         field pubkey type string {
             indexing: attribute | summary

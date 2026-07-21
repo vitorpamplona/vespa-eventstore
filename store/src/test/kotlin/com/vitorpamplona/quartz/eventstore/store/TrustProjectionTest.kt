@@ -21,8 +21,8 @@
 package com.vitorpamplona.quartz.eventstore.store
 
 import com.vitorpamplona.quartz.eventstore.vespa.InMemoryEventIndex
-import com.vitorpamplona.quartz.eventstore.vespa.InMemoryProfileIndex
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileDoc
+import com.vitorpamplona.quartz.eventstore.vespa.InMemoryReputationIndex
+import com.vitorpamplona.quartz.eventstore.vespa.doc.ReputationDoc
 import com.vitorpamplona.quartz.nip01Core.relay.normalizer.RelayUrlNormalizer
 import com.vitorpamplona.quartz.nip01Core.store.IEventStore
 import com.vitorpamplona.quartz.nip09Deletions.DeletionEvent
@@ -46,8 +46,8 @@ class TrustProjectionTest {
     private val service2 = "6e".repeat(32)
     private val subject = "ab".repeat(32)
 
-    private val profiles = InMemoryProfileIndex()
-    private val projection = TrustProjection(InMemoryEventIndex(), profiles)
+    private val reputations = InMemoryReputationIndex()
+    private val projection = TrustProjection(InMemoryEventIndex(), reputations)
     private val store = VespaEventStore(projection, relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
 
     private var t = 1_000_000L
@@ -87,8 +87,8 @@ class TrustProjectionTest {
             store.insert(list10040())
             store.insert(card())
             assertEquals(
-                ProfileDoc(subject, mapOf(observer to 87), mapOf(observer to 120.0)),
-                profiles.get(subject),
+                ReputationDoc(subject, mapOf(observer to 87), mapOf(observer to 120.0)),
+                reputations.get(subject),
             )
         }
 
@@ -96,9 +96,9 @@ class TrustProjectionTest {
     fun `a 30382 arriving before its 10040 is attributed when the list shows up`() =
         runBlocking {
             store.insert(card())
-            assertNull(profiles.get(subject), "no provider mapping yet")
+            assertNull(reputations.get(subject), "no provider mapping yet")
             store.insert(list10040())
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
+            assertEquals(mapOf(observer to 87), reputations.get(subject)?.influenceScores)
         }
 
     @Test
@@ -107,7 +107,7 @@ class TrustProjectionTest {
             store.insert(list10040())
             store.insert(card(rank = 87, at = 100))
             store.insert(card(rank = null, followers = null, at = 200))
-            assertNull(profiles.get(subject), "the newest version is the whole truth")
+            assertNull(reputations.get(subject), "the newest version is the whole truth")
         }
 
     @Test
@@ -117,7 +117,7 @@ class TrustProjectionTest {
             val scored = card()
             store.insert(scored)
             store.insert(DeletionEvent(id(), service, next(), arrayOf(arrayOf("e", scored.id)), "", ""))
-            assertNull(profiles.get(subject))
+            assertNull(reputations.get(subject))
         }
 
     @Test
@@ -126,7 +126,7 @@ class TrustProjectionTest {
             store.insert(list10040())
             store.insert(card(at = 100))
             store.insert(RequestToVanishEvent(id(), service, 200, arrayOf(arrayOf("relay", "ALL_RELAYS")), "", ""))
-            assertNull(profiles.get(subject))
+            assertNull(reputations.get(subject))
         }
 
     @Test
@@ -136,8 +136,8 @@ class TrustProjectionTest {
             store.insert(list10040(author = observer2, serviceKey = service2))
             store.insert(card(signer = service, rank = 87))
             store.insert(card(signer = service2, rank = 15, followers = 3))
-            assertEquals(mapOf(observer to 87, observer2 to 15), profiles.get(subject)?.influenceScores)
-            assertEquals(mapOf(observer to 120.0, observer2 to 3.0), profiles.get(subject)?.followerCounts)
+            assertEquals(mapOf(observer to 87, observer2 to 15), reputations.get(subject)?.influenceScores)
+            assertEquals(mapOf(observer to 120.0, observer2 to 3.0), reputations.get(subject)?.followerCounts)
         }
 
     @Test
@@ -146,12 +146,12 @@ class TrustProjectionTest {
             store.insert(list10040(serviceKey = service, at = 100))
             store.insert(card(signer = service, rank = 87))
             store.insert(card(signer = service2, rank = 42))
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
+            assertEquals(mapOf(observer to 87), reputations.get(subject)?.influenceScores)
 
             // The observer's NEW 10040 picks service2: the superseding insert
             // re-attributes — service's score detaches, service2's attaches.
             store.insert(list10040(serviceKey = service2, at = 200))
-            assertEquals(mapOf(observer to 42), profiles.get(subject)?.influenceScores)
+            assertEquals(mapOf(observer to 42), reputations.get(subject)?.influenceScores)
         }
 
     @Test
@@ -159,10 +159,10 @@ class TrustProjectionTest {
         runBlocking {
             store.insert(list10040())
             store.insert(card())
-            profiles.docs.clear()
+            reputations.docs.clear()
 
             projection.rebuildAll()
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
+            assertEquals(mapOf(observer to 87), reputations.get(subject)?.influenceScores)
         }
 
     /** The BULK path: one store batch of scores builds every subject's parent doc. */
@@ -175,14 +175,14 @@ class TrustProjectionTest {
             val outcomes = store.batchInsert(batch)
             assertEquals(40, outcomes.count { it is IEventStore.InsertOutcome.Accepted })
             subjects.forEach { s ->
-                assertEquals(mapOf(observer to 10), profiles.docs.getValue(s).influenceScores, "subject ${'$'}s")
+                assertEquals(mapOf(observer to 10), reputations.docs.getValue(s).influenceScores, "subject ${'$'}s")
             }
         }
 
     /**
      * Two services (both mapped to the observer) scoring one subject in the
      * SAME bulk batch: the observer cell holds the last-applied card's value —
-     * the zero-read [ProfileIndex.updateCells] path's documented
+     * the zero-read [ReputationIndex.updateCells] path's documented
      * "latest-arriving mapped card wins", matching what [derive] does with a
      * LinkedHashMap (last write wins) on the sequential path.
      */
@@ -194,7 +194,7 @@ class TrustProjectionTest {
             val outcomes = store.batchInsert(listOf(card(signer = service, rank = 30), card(signer = service2, rank = 71)))
             assertEquals(2, outcomes.count { it is IEventStore.InsertOutcome.Accepted })
             // Both cards attribute to the ONE observer cell; last applied wins.
-            assertEquals(mapOf(observer to 71), profiles.get(subject)?.influenceScores)
+            assertEquals(mapOf(observer to 71), reputations.get(subject)?.influenceScores)
         }
 
     /** A retraction (rank tag gone) inside a bulk batch supersedes and empties the cell. */
@@ -206,7 +206,7 @@ class TrustProjectionTest {
             // Newer version with no rank/followers, delivered through the bulk path.
             val outcomes = store.batchInsert(listOf(card(rank = null, followers = null, at = 200)))
             assertEquals(1, outcomes.count { it is IEventStore.InsertOutcome.Accepted })
-            assertNull(profiles.get(subject), "the retraction is the newest version — no cell left")
+            assertNull(reputations.get(subject), "the retraction is the newest version — no cell left")
         }
 
     /**
@@ -220,10 +220,10 @@ class TrustProjectionTest {
         runBlocking {
             store.insert(list10040())
             store.insert(card(rank = 87, followers = 120, at = 100))
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
+            assertEquals(mapOf(observer to 87), reputations.get(subject)?.influenceScores)
             // Newer card keeps followers but drops rank — via the bulk path.
             store.batchInsert(listOf(card(rank = null, followers = 200, at = 200)))
-            val doc = profiles.get(subject)
+            val doc = reputations.get(subject)
             assertEquals(emptyMap(), doc?.influenceScores, "the dropped rank must not linger")
             assertEquals(mapOf(observer to 200.0), doc?.followerCounts, "followers updated")
         }
@@ -249,17 +249,17 @@ class TrustProjectionTest {
                     card(signer = service, about = subjectB, rank = null, followers = null, at = 60), // retracts subjectB
                 )
 
-            val sequentialProfiles = InMemoryProfileIndex()
-            val sequential = VespaEventStore(TrustProjection(InMemoryEventIndex(), sequentialProfiles), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
+            val sequentialReputations = InMemoryReputationIndex()
+            val sequential = VespaEventStore(TrustProjection(InMemoryEventIndex(), sequentialReputations), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
             events.forEach { sequential.insert(it) }
 
-            val bulkProfiles = InMemoryProfileIndex()
-            val bulk = VespaEventStore(TrustProjection(InMemoryEventIndex(), bulkProfiles), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
+            val bulkReputations = InMemoryReputationIndex()
+            val bulk = VespaEventStore(TrustProjection(InMemoryEventIndex(), bulkReputations), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
             bulk.batchInsert(events)
 
-            assertEquals(sequentialProfiles.docs, bulkProfiles.docs, "bulk cell-updates must match sequential re-derivation")
+            assertEquals(sequentialReputations.docs, bulkReputations.docs, "bulk cell-updates must match sequential re-derivation")
             // And the values are what we expect, not coincidentally-equal empties.
-            assertEquals(mapOf(observer to 55, observer2 to 9), bulkProfiles.docs.getValue(subject).influenceScores)
-            assertNull(bulkProfiles.docs[subjectB], "subjectB was retracted")
+            assertEquals(mapOf(observer to 55, observer2 to 9), bulkReputations.docs.getValue(subject).influenceScores)
+            assertNull(bulkReputations.docs[subjectB], "subjectB was retracted")
         }
 }

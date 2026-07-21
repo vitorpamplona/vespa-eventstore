@@ -103,11 +103,11 @@ data class EventDoc(
             put("content", content)
             put("sig", sig)
             put("owner", owner)
-            // Reference to the author's ranking state (the global profile
+            // Reference to the author's ranking state (the global reputation
             // parent), which controls how any kind ranks by the observer's
             // trust in its author. It is purely pubkey-derived, so it's stamped
             // here rather than by an extractor.
-            put("author_ref", "id:profile:profile::$pubkey")
+            put("author_ref", "id:reputation:reputation::$pubkey")
             for ((field, value) in search.fields()) put(field, value)
             // Always written. An absent numeric attribute reads as 0 in Vespa,
             // which would make "not yet expired" range queries impossible.

@@ -21,7 +21,7 @@
 package com.vitorpamplona.quartz.eventstore.vespa
 
 /**
- * The Vespa application package (event + profile schemas and their rank
+ * The Vespa application package (event + reputation schemas and their rank
  * profiles), bundled into this jar as a zip by the build. It is the deploy
  * artifact the store's schema must be running before any query works — shipped
  * with the code so the two versions can never drift.

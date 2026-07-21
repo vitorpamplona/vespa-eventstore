@@ -81,18 +81,19 @@ interface EventIndex : AutoCloseable {
     suspend fun count(query: EventQuery): Int
 
     /**
-     * The number of DISTINCT authors (pubkeys) among the matches — what `sot
-     * status` reports as "pubkeys with content". The default rides [search], so
-     * it is exact only where search is uncapped (the in-memory reference); the
-     * real client overrides it with a grouping count over the full match set.
+     * The number of DISTINCT authors (pubkeys) among the matches — what a
+     * status/metrics caller reports as "pubkeys with content". The default rides
+     * [search], so it is exact only where search is uncapped (the in-memory
+     * reference); the real client overrides it with a grouping count over the
+     * full match set.
      */
     suspend fun countDistinctAuthors(query: EventQuery): Int = search(query).map { it.pubkey }.distinct().size
 
     /**
-     * How many docs match [query] per kind (kind -> count) — the corpus shape
-     * `sot status` prints as "top kinds". The default rides [search] (exact only
-     * where uncapped, the in-memory reference); the real client overrides it
-     * with a grouping over the full match set.
+     * How many docs match [query] per kind (kind -> count) — the corpus shape a
+     * status/metrics caller prints as "top kinds". The default rides [search]
+     * (exact only where uncapped, the in-memory reference); the real client
+     * overrides it with a grouping over the full match set.
      */
     suspend fun countByKind(query: EventQuery): Map<Int, Int> = search(query).groupingBy { it.kind }.eachCount()
 

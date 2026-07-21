@@ -14,7 +14,7 @@
 # zeroes out on docs of the other kinds — one rank profile serves a mixed
 # kinds filter with a plain SUM, no kind dispatch, and each doc is ranked by
 # its own kind's equations weighted by the observer's web of trust imported
-# from the `profile` parent document. A kind MAY also fill a profile ROLE
+# from the `reputation` parent document. A kind MAY also fill a profile ROLE
 # column when it carries that data (an app handler fills the whole profile
 # group; a repo/podcast/stream fills `website`); the composites combine the
 # groups with max()/SUM, so that deliberate overlap stays well-defined.
@@ -23,7 +23,7 @@
 # brainstorm-k8s charts/brainstorm/vespa-app doc.sd (2026-07; operator-
 # provided) — the §12 multiplicative-trust default and all sort alternates —
 # with two mechanical changes: the trust tensors are IMPORTED from the
-# profile parent (author_influence_scores / author_follower_counts) instead of
+# reputation parent (author_influence_scores / author_follower_counts) instead of
 # living on the doc, and the generic tier group extends each composite so
 # non-profile kinds ride the same profiles. Query side:
 # brainstorm_server app/core/vespa.py + vespa_query.py.
@@ -91,11 +91,11 @@ schema event {
             attribute: fast-search
         }
 
-        # Reference to the author's ranking state (the global `profile`
-        # parent). Written on every doc as "id:profile:profile::<pubkey>";
+        # Reference to the author's ranking state (the global `reputation`
+        # parent). Written on every doc as "id:reputation:reputation::<pubkey>";
         # the imported tensors below are what let ANY kind rank by the
         # observer's trust in its author.
-        field author_ref type reference<profile> {
+        field author_ref type reference<reputation> {
             indexing: attribute
         }
 
@@ -283,13 +283,13 @@ schema event {
             # Discard hits whose text_score is below this BEFORE the trust
             # multiply — kills weak gram-only noise so trust can't float it.
             query(text_score_cutoff) double: 50.0
-            # Tier-group weights (sot extension, non-profile kinds).
+            # Tier-group weights (generic-tier extension, non-profile kinds).
             query(w_secondary) double: 0.4
             query(w_content) double: 0.15
             query(w_location) double: 0.3
         }
 
-        # The observer's trust in this doc's AUTHOR, via the profile parent.
+        # The observer's trust in this doc's AUTHOR, via the reputation parent.
         function user_score() {
             expression: sum(query(user_q) * attribute(author_influence_scores))
         }
@@ -362,7 +362,7 @@ schema event {
         # Multi-word proximity over the primary fields (0..1): Meilisearch's
         # `proximity` rule. ~1 for single-word queries (harmless); rewards
         # close-together terms on multi-word ones. Tier fields included so
-        # titles get the same treatment (sot extension).
+        # titles get the same treatment (generic-tier extension).
         function proximity() {
             expression: max(max(fieldMatch(name).proximity, fieldMatch(display_name).proximity), fieldMatch(search_primary).proximity)
         }
@@ -385,7 +385,7 @@ schema event {
             expression: if(matchCount(nip05) > 0 || matchCount(lud16) > 0, 1, 0)
         }
 
-        # ---- sot extension: the generic tier group (non-profile kinds). ----
+        # ---- generic-tier extension: the generic tier group (non-profile kinds). ----
         # Same shape as the name math so magnitudes stay cross-kind
         # comparable: an exact title/subject token match ~ an exact name match.
         # All of these are 0 on kind-0 docs (their tier fields are empty),
@@ -552,7 +552,7 @@ schema event {
         }
     }
 
-    # sot's stable profile names: `search` is what EventYql sends by default
+    # the library's stable profile names: `search` is what EventYql sends by default
     # for any search term (currently Brainstorm's §12 default), `text` is the
     # pure-text profile NIP-50 `sort:text` selects. Both are pure renames.
     rank-profile search inherits sort_followers {

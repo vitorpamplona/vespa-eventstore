@@ -32,7 +32,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * One pubkey's ranking state: the `profile` GLOBAL parent document every event
+ * One pubkey's ranking state: the `reputation` GLOBAL parent document every event
  * references (`author_ref`) and imports for trust-weighted ranking. It is NOT
  * an event. The trust projection derives it from stored kind-30382s and
  * rewrites it whole on every change (recompute, not cell surgery), so it can be
@@ -41,7 +41,7 @@ import kotlinx.serialization.json.putJsonObject
  * Tensor cells are keyed by OBSERVER pubkey: [influenceScores] = rank
  * (influence*100, 0..100), [followerCounts] = verified-follower count.
  */
-data class ProfileDoc(
+data class ReputationDoc(
     val pubkey: HexKey,
     val influenceScores: Map<HexKey, Int> = emptyMap(),
     val followerCounts: Map<HexKey, Double> = emptyMap(),
@@ -63,8 +63,8 @@ data class ProfileDoc(
          * arrive in TWO shapes: the short object form we feed (`{obs: v}`) and
          * the verbose form document-API GETs render (`{"type": …, "cells": {obs: v}}`).
          */
-        fun fromSummary(fields: JsonObject): ProfileDoc =
-            ProfileDoc(
+        fun fromSummary(fields: JsonObject): ReputationDoc =
+            ReputationDoc(
                 pubkey = fields.getValue("pubkey").jsonPrimitive.content,
                 influenceScores = cells(fields["influence_scores"])?.mapValues { it.value.jsonPrimitive.int } ?: emptyMap(),
                 followerCounts = cells(fields["follower_counts"])?.mapValues { it.value.jsonPrimitive.double } ?: emptyMap(),
@@ -79,44 +79,9 @@ data class ProfileDoc(
  * cells, applied as a partial UPDATE with no read and no full-doc rewrite. Null
  * fields leave the corresponding tensor untouched.
  */
-data class ProfileCells(
+data class ReputationCells(
     val subject: String,
     val observer: String,
     val influence: Int?,
     val followers: Double?,
 )
-
-/**
- * The engine port for the profile parent documents. Same consistency contract
- * as [EventIndex]: an acked [put] is visible to ranking.
- */
-interface ProfileIndex : AutoCloseable {
-    suspend fun get(pubkey: String): ProfileDoc?
-
-    suspend fun put(profile: ProfileDoc)
-
-    /** Bulk [put]; implementations may pipeline (see [EventIndex.putAll]). */
-    suspend fun putAll(profiles: List<ProfileDoc>) = profiles.forEach { put(it) }
-
-    /**
-     * Upsert single tensor cells on the subjects' parents, creating missing
-     * parents. This is the insert path's ZERO-READ alternative to a full [put]
-     * (Vespa's tensor `add` update). The caller must only send values that are
-     * current-best for their (subject, observer); the store's supersession
-     * provides exactly that at insert time. Same-subject updates apply in list
-     * order. The default implementation is read-modify-write (the in-memory
-     * spec).
-     */
-    suspend fun updateCells(updates: List<ProfileCells>) =
-        updates.forEach { u ->
-            val cur = get(u.subject) ?: ProfileDoc(u.subject)
-            put(
-                cur.copy(
-                    influenceScores = u.influence?.let { cur.influenceScores + (u.observer to it) } ?: cur.influenceScores,
-                    followerCounts = u.followers?.let { cur.followerCounts + (u.observer to it) } ?: cur.followerCounts,
-                ),
-            )
-        }
-
-    suspend fun remove(pubkey: String)
-}

@@ -24,10 +24,10 @@ import com.vitorpamplona.quartz.eventstore.vespa.IngestStats
 import com.vitorpamplona.quartz.eventstore.vespa.QUERY_FANOUT
 import com.vitorpamplona.quartz.eventstore.vespa.client.DocRef
 import com.vitorpamplona.quartz.eventstore.vespa.client.EventIndex
+import com.vitorpamplona.quartz.eventstore.vespa.client.ReputationIndex
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileCells
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileDoc
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileIndex
+import com.vitorpamplona.quartz.eventstore.vespa.doc.ReputationCells
+import com.vitorpamplona.quartz.eventstore.vespa.doc.ReputationDoc
 import com.vitorpamplona.quartz.eventstore.vespa.mapBounded
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
 import com.vitorpamplona.quartz.nip01Core.core.Event
@@ -35,7 +35,7 @@ import com.vitorpamplona.quartz.nip85TrustedAssertions.list.TrustProviderListEve
 import com.vitorpamplona.quartz.nip85TrustedAssertions.users.ContactCardEvent
 
 /**
- * Maintains the `profile` parent documents — the per-pubkey trust tensors the
+ * Maintains the `reputation` parent documents — the per-pubkey trust tensors the
  * schema imports into every event's ranking. It works as an [EventIndex]
  * DECORATOR: it wraps the index the store writes through, so every mutation that
  * touches trust data triggers a recompute.
@@ -46,7 +46,7 @@ import com.vitorpamplona.quartz.nip85TrustedAssertions.users.ContactCardEvent
  * with ZERO deletion-specific code.
  *
  * Recompute, never cell surgery: a change re-derives the SUBJECT's whole
- * [ProfileDoc] from the stored kind-30382s about them —
+ * [ReputationDoc] from the stored kind-30382s about them —
  *
  *   subject's 30382s (d = subject) -> signer is a SERVICE key
  *   -> observer = the kind-10040 author whose `30382:rank` entry lists that
@@ -66,7 +66,7 @@ import com.vitorpamplona.quartz.nip85TrustedAssertions.users.ContactCardEvent
  */
 class TrustProjection(
     private val inner: EventIndex,
-    private val profiles: ProfileIndex,
+    private val reputations: ReputationIndex,
 ) : EventIndex {
     override suspend fun get(id: String): EventDoc? = inner.get(id)
 
@@ -84,7 +84,7 @@ class TrustProjection(
 
     override fun close() {
         inner.close()
-        profiles.close()
+        reputations.close()
     }
 
     override suspend fun put(doc: EventDoc) {
@@ -96,7 +96,7 @@ class TrustProjection(
      * The bulk path writes ranking with ZERO reads. The store's supersession
      * guarantees every card reaching this putAll is the NEWEST version of its
      * (service, subject) address, so its rank/followers can be applied as a
-     * tensor-cell UPDATE ([ProfileIndex.updateCells]) directly. Measured on an
+     * tensor-cell UPDATE ([ReputationIndex.updateCells]) directly. Measured on an
      * 11M-card load, re-deriving parents from re-fetched cards was 44% of the
      * entire ingest wall clock.
      *
@@ -115,7 +115,7 @@ class TrustProjection(
         val cards = docs.filter { it.kind == ContactCardEvent.KIND }
         if (cards.isEmpty()) return
         val serviceToObserver = providers.get()
-        val updates = ArrayList<ProfileCells>(cards.size)
+        val updates = ArrayList<ReputationCells>(cards.size)
         val retracted = LinkedHashSet<String>()
         for (doc in cards) {
             val subject = subjectOf(doc) ?: continue
@@ -124,7 +124,7 @@ class TrustProjection(
             val influence = card.rank()
             val followers = card.followerCount()?.toDouble()
             if (influence != null && followers != null) {
-                updates += ProfileCells(subject, observer, influence, followers)
+                updates += ReputationCells(subject, observer, influence, followers)
             } else {
                 // A card MISSING either dimension can't take the zero-read cell
                 // update. updateCells only ADDS cells, so a null dimension would
@@ -135,7 +135,7 @@ class TrustProjection(
                 retracted += subject
             }
         }
-        IngestStats.timed("proj.write") { profiles.updateCells(updates) }
+        IngestStats.timed("proj.write") { reputations.updateCells(updates) }
         if (retracted.isNotEmpty()) recomputeBatch(retracted.toList(), serviceToObserver, removeEmpties = true)
     }
 
@@ -145,7 +145,7 @@ class TrustProjection(
      * CHUNKED, concurrency-BOUNDED queries: hundreds of subjects per round trip,
      * a few round trips in flight (unbounded fan-out measurably times the engine
      * out). Every parent is derived locally, and the results are written through
-     * one pipelined [ProfileIndex.putAll].
+     * one pipelined [ReputationIndex.putAll].
      */
     private suspend fun recomputeBatch(
         subjects: List<String>,
@@ -164,19 +164,19 @@ class TrustProjection(
                     subjectOf(doc)?.takeIf { it in wanted }?.let { bySubject.getOrPut(it) { mutableListOf() } += doc }
                 }
             }
-        val puts = ArrayList<ProfileDoc>(subjects.size)
+        val puts = ArrayList<ReputationDoc>(subjects.size)
         val removes = ArrayList<String>()
         for (subject in subjects) {
-            val profile = derive(subject, bySubject[subject].orEmpty(), serviceToObserver)
-            if (!profile.isEmpty()) {
-                puts += profile
+            val reputation = derive(subject, bySubject[subject].orEmpty(), serviceToObserver)
+            if (!reputation.isEmpty()) {
+                puts += reputation
             } else if (removeEmpties) {
                 removes += subject
             }
         }
         IngestStats.timed("proj.write") {
-            profiles.putAll(puts)
-            removes.mapBounded(QUERY_FANOUT) { profiles.remove(it) }
+            reputations.putAll(puts)
+            removes.mapBounded(QUERY_FANOUT) { reputations.remove(it) }
         }
     }
 
@@ -215,8 +215,8 @@ class TrustProjection(
         serviceToObserver: Map<String, String>,
     ) {
         val docs = inner.search(EventQuery(kinds = listOf(ContactCardEvent.KIND), tags = mapOf("d" to listOf(subject))))
-        val profile = derive(subject, docs, serviceToObserver)
-        if (profile.isEmpty()) profiles.remove(subject) else profiles.put(profile)
+        val reputation = derive(subject, docs, serviceToObserver)
+        if (reputation.isEmpty()) reputations.remove(subject) else reputations.put(reputation)
     }
 
     /** [subject]'s parent doc from its score docs — pure derivation, no I/O. */
@@ -224,7 +224,7 @@ class TrustProjection(
         subject: String,
         docs: List<EventDoc>,
         serviceToObserver: Map<String, String>,
-    ): ProfileDoc {
+    ): ReputationDoc {
         val influence = LinkedHashMap<String, Int>()
         val followers = LinkedHashMap<String, Double>()
         for (doc in docs) {
@@ -233,7 +233,7 @@ class TrustProjection(
             card.rank()?.let { influence[observer] = it }
             card.followerCount()?.let { followers[observer] = it.toDouble() }
         }
-        return ProfileDoc(subject, influence, followers)
+        return ReputationDoc(subject, influence, followers)
     }
 
     /** service key -> observer (NIP-85 attribution), cached across a pass; see [ProviderMap]. */

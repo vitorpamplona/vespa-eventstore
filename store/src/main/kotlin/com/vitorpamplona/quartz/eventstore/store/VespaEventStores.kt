@@ -21,14 +21,14 @@
 package com.vitorpamplona.quartz.eventstore.store
 
 import com.vitorpamplona.quartz.eventstore.vespa.client.VespaEventIndex
-import com.vitorpamplona.quartz.eventstore.vespa.client.VespaProfileIndex
+import com.vitorpamplona.quartz.eventstore.vespa.client.VespaReputationIndex
 import com.vitorpamplona.quartz.nip01Core.relay.normalizer.NormalizedRelayUrl
 import java.net.URI
 
 /**
  * The library front door. [open] wires a ready [VespaStore] over a running Vespa
  * in one call — the whole VespaEventStore(TrustProjection(VespaEventIndex,
- * VespaProfileIndex)) stack, plus (by default) a first-run schema deploy.
+ * VespaReputationIndex)) stack, plus (by default) a first-run schema deploy.
  *
  * Vespa itself is a prerequisite, like a database: point [open] at one that is
  * already running.
@@ -55,7 +55,7 @@ object VespaEventStores {
     ): VespaStore {
         if (autoDeploy) SchemaDeployer(configUrl).deployIfAbsent(url)
         val events = VespaEventIndex(url)
-        val store = VespaEventStore(TrustProjection(events, VespaProfileIndex(url)), relay = relay)
+        val store = VespaEventStore(TrustProjection(events, VespaReputationIndex(url)), relay = relay)
         return VespaStore(store, events)
     }
 

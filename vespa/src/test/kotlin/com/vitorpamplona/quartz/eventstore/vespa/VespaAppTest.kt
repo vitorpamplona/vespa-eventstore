@@ -43,6 +43,6 @@ class VespaAppTest {
         val names = entries(VespaApp.zipBytes())
         assertTrue("services.xml" in names, "package must declare its services: $names")
         assertTrue("schemas/event.sd" in names, "package must carry the event schema: $names")
-        assertTrue("schemas/profile.sd" in names, "package must carry the profile (trust) schema: $names")
+        assertTrue("schemas/reputation.sd" in names, "package must carry the reputation schema: $names")
     }
 }

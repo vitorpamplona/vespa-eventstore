@@ -21,7 +21,7 @@
 package com.vitorpamplona.quartz.eventstore.vespa.query
 
 /**
- * Per-word fuzzy recall, extended with sot's generic tier fields. This is the
+ * Per-word fuzzy recall, extended with the generic tier fields. This is the
  * drift-prone half of [EventYql]. It must stay in lockstep with the schema's
  * search fields and match ladder, so it is isolated here from the generic
  * NIP-01/NIP-50 filter-to-YQL assembly. MockVespaEngine's parser guards against

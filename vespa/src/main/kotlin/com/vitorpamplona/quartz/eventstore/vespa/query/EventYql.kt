@@ -106,41 +106,19 @@ object EventYql {
      * [build]'s recency `order by` would undercount by 10x+. Grouping count over
      * the full, unranked match set is exact.
      */
-    fun buildCount(q: EventQuery): VespaQuery? {
-        // A present limit <= 0 is the "matches nothing" sentinel (as in [build]);
-        // a positive limit is about hits, not the count, so grouping ignores it.
-        if (q.limit != null && q.limit <= 0) return null
-        val params = LinkedHashMap<String, String>()
-        val clauses = filterClauses(q, params) ?: return null
-        val where = if (clauses.isEmpty()) "true" else clauses.joinToString(" and ")
-        return VespaQuery(
-            yql = "select * from event where $where limit 0 | all(output(count()))",
-            params = params,
-            ranking = RANK_UNRANKED,
-        )
-    }
+    fun buildCount(q: EventQuery): VespaQuery? = grouping(q, "all(output(count()))")
 
     /**
      * A DISTINCT-value count over [field] (an attribute): the same filters, a
      * grouping that outputs `count()` on the group LIST — i.e. the number of
      * distinct values, not the number of docs. No `order by` (same match-phase
-     * reasoning as [buildCount]). Used by `sot status` to count the distinct
-     * pubkeys with content. Null when the filter provably matches nothing.
+     * reasoning as [buildCount]). Used by status/metrics callers to count the
+     * distinct pubkeys with content. Null when the filter provably matches nothing.
      */
     fun buildDistinctCount(
         q: EventQuery,
         field: String,
-    ): VespaQuery? {
-        if (q.limit != null && q.limit <= 0) return null
-        val params = LinkedHashMap<String, String>()
-        val clauses = filterClauses(q, params) ?: return null
-        val where = if (clauses.isEmpty()) "true" else clauses.joinToString(" and ")
-        return VespaQuery(
-            yql = "select * from event where $where limit 0 | all(group($field) output(count()))",
-            params = params,
-            ranking = RANK_UNRANKED,
-        )
-    }
+    ): VespaQuery? = grouping(q, "all(group($field) output(count()))")
 
     /**
      * DISTINCT authors of the match set: the same filters, unranked, grouped by
@@ -156,17 +134,7 @@ object EventYql {
      * there are a handful; the cap is orders of magnitude above that. If it were
      * ever hit, the sweep would just under-delete (safe), never over-delete.
      */
-    fun buildDistinctAuthors(q: EventQuery): VespaQuery? {
-        if (q.limit != null && q.limit <= 0) return null
-        val params = LinkedHashMap<String, String>()
-        val clauses = filterClauses(q, params) ?: return null
-        val where = if (clauses.isEmpty()) "true" else clauses.joinToString(" and ")
-        return VespaQuery(
-            yql = "select * from event where $where limit 0 | all(group(pubkey) max($MAX_AUTHOR_GROUPS) each(output(count())))",
-            params = params,
-            ranking = RANK_UNRANKED,
-        )
-    }
+    fun buildDistinctAuthors(q: EventQuery): VespaQuery? = grouping(q, "all(group(pubkey) max($MAX_AUTHOR_GROUPS) each(output(count())))")
 
     /** A group cap high enough to hold every distinct kind — there are dozens, not thousands. */
     const val KIND_GROUP_MAX = 1000
@@ -174,16 +142,31 @@ object EventYql {
     /**
      * A per-KIND histogram: the same filters, grouped by kind with a `count()`
      * on each group. No `order by` (same match-phase reasoning as [buildCount]).
-     * Used by `sot status` to show the corpus shape (top kinds by volume). Null
-     * when the filter provably matches nothing.
+     * Used by status/metrics callers to show the corpus shape (top kinds by
+     * volume). Null when the filter provably matches nothing.
      */
-    fun buildKindHistogram(q: EventQuery): VespaQuery? {
+    fun buildKindHistogram(q: EventQuery): VespaQuery? = grouping(q, "all(group(kind) max($KIND_GROUP_MAX) each(output(count())))")
+
+    /**
+     * The shared shape of every aggregation query ([buildCount],
+     * [buildDistinctCount], [buildDistinctAuthors], [buildKindHistogram]): the
+     * same filter WHERE clause, `limit 0` (no hits, only the grouping), the
+     * given [pipeline] grouping expression, and NO `order by` — sorting by an
+     * attribute trips Vespa's match-phase on a large corpus and caps the reported
+     * totals. Unranked. Null when the filter provably matches nothing.
+     */
+    private fun grouping(
+        q: EventQuery,
+        pipeline: String,
+    ): VespaQuery? {
+        // A present limit <= 0 is the "matches nothing" sentinel (as in [build]);
+        // a positive limit is about hits, not the grouping, so it is ignored.
         if (q.limit != null && q.limit <= 0) return null
         val params = LinkedHashMap<String, String>()
         val clauses = filterClauses(q, params) ?: return null
         val where = if (clauses.isEmpty()) "true" else clauses.joinToString(" and ")
         return VespaQuery(
-            yql = "select * from event where $where limit 0 | all(group(kind) max($KIND_GROUP_MAX) each(output(count())))",
+            yql = "select * from event where $where limit 0 | $pipeline",
             params = params,
             ranking = RANK_UNRANKED,
         )

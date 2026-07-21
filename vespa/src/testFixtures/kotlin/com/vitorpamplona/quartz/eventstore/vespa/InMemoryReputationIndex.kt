@@ -19,18 +19,18 @@
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 package com.vitorpamplona.quartz.eventstore.vespa
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileDoc
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileIndex
+import com.vitorpamplona.quartz.eventstore.vespa.client.ReputationIndex
+import com.vitorpamplona.quartz.eventstore.vespa.doc.ReputationDoc
 import java.util.concurrent.ConcurrentHashMap
 
-/** The in-memory reference [ProfileIndex] — what projection tests assert against. */
-class InMemoryProfileIndex : ProfileIndex {
-    val docs = ConcurrentHashMap<String, ProfileDoc>()
+/** The in-memory reference [ReputationIndex] — what projection tests assert against. */
+class InMemoryReputationIndex : ReputationIndex {
+    val docs = ConcurrentHashMap<String, ReputationDoc>()
 
-    override suspend fun get(pubkey: String): ProfileDoc? = docs[pubkey]
+    override suspend fun get(pubkey: String): ReputationDoc? = docs[pubkey]
 
-    override suspend fun put(profile: ProfileDoc) {
-        docs[profile.pubkey] = profile
+    override suspend fun put(reputation: ReputationDoc) {
+        docs[reputation.pubkey] = reputation
     }
 
     override suspend fun remove(pubkey: String) {

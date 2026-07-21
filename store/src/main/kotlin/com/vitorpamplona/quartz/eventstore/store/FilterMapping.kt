@@ -64,7 +64,7 @@ internal fun Filter.toEventQuery(): EventQuery? {
     if (tags?.values?.any { it.isEmpty() } == true || tagsAll?.values?.any { it.isEmpty() } == true) return null
     val parsed = SearchQuery.parse(search)
     val terms = parsed.terms.ifEmpty { null }
-    val sort = parsed.extensions["sort"]?.let(::rankProfileOf)
+    val sort = parsed.extensions["sort"]?.let(::rankReputationOf)
     val floor = parsed.extensions["filter"]?.let(::rankFloorOf)
     val observer = parsed.extensions["observer"]?.lowercase()?.takeIf(Hex::isHex64)
     val ranked = terms != null || sort != null
@@ -92,7 +92,7 @@ internal fun Filter.toEventQuery(): EventQuery? {
 const val DEFAULT_MIN_RANK = 2.0
 
 /** `sort:` value -> rank profile; null (ignored) for values we don't recognize. */
-private fun rankProfileOf(value: String): String? =
+private fun rankReputationOf(value: String): String? =
     when (value) {
         "rank", "rank:desc" -> EventYql.RANK_DESC
         "rank:asc" -> EventYql.RANK_ASC

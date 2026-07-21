@@ -129,7 +129,7 @@ object SearchExtractors {
      * Systemic post-pass over the per-kind [base]: fold the event's hashtags
      * into the secondary tier and its `location` tags into the location column,
      * for EVERY tier kind at once — so keyword and place-name recall don't
-     * depend on each kind's branch remembering to add them. Profile-shaped kinds
+     * depend on each kind's branch remembering to add them. Reputation-shaped kinds
      * (kind 0, app handlers) own their columns and are left untouched;
      * non-searchable kinds stay invisible.
      */

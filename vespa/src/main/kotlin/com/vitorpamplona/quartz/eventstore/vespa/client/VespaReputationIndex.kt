@@ -23,9 +23,8 @@ import ai.vespa.feed.client.DocumentId
 import ai.vespa.feed.client.FeedClient
 import ai.vespa.feed.client.FeedClientBuilder
 import ai.vespa.feed.client.OperationParameters
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileCells
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileDoc
-import com.vitorpamplona.quartz.eventstore.vespa.doc.ProfileIndex
+import com.vitorpamplona.quartz.eventstore.vespa.doc.ReputationCells
+import com.vitorpamplona.quartz.eventstore.vespa.doc.ReputationDoc
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -38,10 +37,10 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.concurrent.Executors
 
-/** The real [ProfileIndex]: the `profile` document type over Vespa HTTP (same wiring as [VespaEventIndex]). */
-class VespaProfileIndex(
+/** The real [ReputationIndex]: the `reputation` document type over Vespa HTTP (same wiring as [VespaEventIndex]). */
+class VespaReputationIndex(
     private val baseUrl: String = System.getenv("VESPA_URL") ?: "http://localhost:8080",
-) : ProfileIndex {
+) : ReputationIndex {
     private val feed: FeedClient =
         FeedClientBuilder
             .create(URI.create(baseUrl))
@@ -64,7 +63,7 @@ class VespaProfileIndex(
             .executor(Executors.newVirtualThreadPerTaskExecutor())
             .build()
 
-    override suspend fun get(pubkey: String): ProfileDoc? {
+    override suspend fun get(pubkey: String): ReputationDoc? {
         val req =
             HttpRequest
                 .newBuilder(URI.create("$baseUrl/document/v1/$NAMESPACE/$DOCTYPE/docid/$pubkey"))
@@ -73,34 +72,34 @@ class VespaProfileIndex(
                 .build()
         val resp = http.sendAsync(req, HttpResponse.BodyHandlers.ofString()).await()
         if (resp.statusCode() == 404) return null
-        require(resp.statusCode() < 400) { "vespa profile get ${resp.statusCode()}: ${resp.body().take(300)}" }
+        require(resp.statusCode() < 400) { "vespa reputation get ${resp.statusCode()}: ${resp.body().take(300)}" }
         val fields = Json.parseToJsonElement(resp.body()).jsonObject["fields"]?.jsonObject ?: return null
-        return ProfileDoc.fromSummary(fields)
+        return ReputationDoc.fromSummary(fields)
     }
 
-    private fun putOp(profile: ProfileDoc) =
+    private fun putOp(reputation: ReputationDoc) =
         feed.put(
-            DocumentId.of(NAMESPACE, DOCTYPE, profile.pubkey),
-            buildJsonObject { put("fields", profile.indexFields()) }.toString(),
+            DocumentId.of(NAMESPACE, DOCTYPE, reputation.pubkey),
+            buildJsonObject { put("fields", reputation.indexFields()) }.toString(),
             feedParams(),
         )
 
-    override suspend fun put(profile: ProfileDoc) {
-        putOp(profile).await()
+    override suspend fun put(reputation: ReputationDoc) {
+        putOp(reputation).await()
     }
 
     /** All puts stay in flight together — the feed client multiplexes them over HTTP/2. */
-    override suspend fun putAll(profiles: List<ProfileDoc>) {
-        profiles.map { putOp(it) }.forEach { it.await() }
+    override suspend fun putAll(reputations: List<ReputationDoc>) {
+        reputations.map { putOp(it) }.forEach { it.await() }
     }
 
     /**
      * Pipelined tensor-cell upserts (Vespa `add` update, create-if-missing).
      * `add` overwrites an existing cell and creates absent ones. The feed
      * client keeps per-document ordering, so same-subject updates land in list
-     * order, which is exactly the [ProfileIndex.updateCells] contract.
+     * order, which is exactly the [ReputationIndex.updateCells] contract.
      */
-    override suspend fun updateCells(updates: List<ProfileCells>) {
+    override suspend fun updateCells(updates: List<ReputationCells>) {
         updates
             .map { u ->
                 val fields =
@@ -128,8 +127,8 @@ class VespaProfileIndex(
     override fun close() = feed.close(true)
 
     private companion object {
-        const val NAMESPACE = "profile"
-        const val DOCTYPE = "profile"
+        const val NAMESPACE = "reputation"
+        const val DOCTYPE = "reputation"
 
         /** Per-op deadline so a half-dead HTTP/2 connection fails instead of hanging the writer forever (see VespaEventIndex). */
         fun feedParams(): OperationParameters = OperationParameters.empty().timeout(Duration.ofSeconds(30))

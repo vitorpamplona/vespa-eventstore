@@ -27,7 +27,7 @@ import com.vitorpamplona.quartz.nip01Core.store.IEventStore
  * The library handle: a ready [IEventStore] backed by Vespa, obtained from
  * [VespaEventStores.open]. It delegates the entire [IEventStore] surface to the
  * wired store, so a consumer programs against the Quartz interface and never sees
- * the VespaEventStore(TrustProjection(VespaEventIndex, VespaProfileIndex)) stack.
+ * the VespaEventStore(TrustProjection(VespaEventIndex, VespaReputationIndex)) stack.
  *
  * Closeable (via [IEventStore]'s AutoCloseable), so `open(...).use { ... }` works.
  */

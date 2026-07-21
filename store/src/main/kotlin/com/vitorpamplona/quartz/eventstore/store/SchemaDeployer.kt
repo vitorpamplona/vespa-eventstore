@@ -69,7 +69,7 @@ class SchemaDeployer(
 
     /**
      * POST the [zip] package to the config server's prepareandactivate endpoint —
-     * the same request the CLI's `sot deploy` makes, JDK-native. Throws on any
+     * the same request `vespa deploy` makes, JDK-native. Throws on any
      * non-2xx so a failed deploy surfaces instead of a store that silently can't
      * query. Returns the config server's response body.
      */

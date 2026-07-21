@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
-    // Publishes the test doubles (MockVespaEngine, InMemoryProfileIndex) in
+    // Publishes the test doubles (MockVespaEngine, InMemoryReputationIndex) in
     // src/testFixtures to downstream module tests.
     `java-test-fixtures`
     alias(libs.plugins.vanniktech.mavenPublish)

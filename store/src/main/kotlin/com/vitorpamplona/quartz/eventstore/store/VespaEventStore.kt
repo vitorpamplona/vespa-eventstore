@@ -379,7 +379,7 @@ class VespaEventStore(
     /**
      * (created_at, id) pairs straight off the docs — no Event materialization
      * and no result cap. Plain filters walk the corpus through the engine's
-     * visit ([com.vitorpamplona.quartz.eventstore.vespa.EventIndex.visitIds]), so a negentropy
+     * visit ([com.vitorpamplona.quartz.eventstore.vespa.client.EventIndex.visitIds]), so a negentropy
      * session (or a sync reconcile diff) sees the COMPLETE match set even when it
      * dwarfs the search page limit. Searching or limit'd filters keep the search
      * path, since their semantics live there.
