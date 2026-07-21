@@ -23,7 +23,6 @@ import ai.vespa.feed.client.DocumentId
 import ai.vespa.feed.client.FeedClient
 import ai.vespa.feed.client.FeedClientBuilder
 import ai.vespa.feed.client.OperationParameters
-import ai.vespa.feed.client.Result
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.doc.SearchFields
 import com.vitorpamplona.quartz.eventstore.vespa.mapBounded
@@ -133,26 +132,6 @@ class VespaEventIndex(
 
     override suspend fun put(doc: EventDoc) {
         putOp(doc).await()
-    }
-
-    /**
-     * One conditional write instead of get-then-put: `create=true` creates the
-     * doc when absent; the always-false test-and-set condition makes the put
-     * fail (`conditionNotMet`, HTTP 412) when a doc with this id exists. The
-     * engine evaluates it atomically, and the feed client surfaces the failed
-     * condition as a RESULT, not an exception — so a duplicate costs the same
-     * single round trip as a create. (Verified against a live engine; the
-     * condition literal `false` is a valid document selection.)
-     */
-    override suspend fun putIfAbsent(doc: EventDoc): Boolean {
-        val result =
-            feed
-                .put(
-                    DocumentId.of(NAMESPACE, DOCTYPE, doc.id),
-                    buildJsonObject { put("fields", doc.indexFields()) }.toString(),
-                    feedParams().createIfNonExistent(true).testAndSetCondition("false"),
-                ).await()
-        return result.type() != Result.Type.conditionNotMet
     }
 
     /** All puts stay in flight together — the feed client multiplexes them over HTTP/2. */

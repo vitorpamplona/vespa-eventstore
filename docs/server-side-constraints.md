@@ -14,7 +14,7 @@ mechanisms that between them cover most of the admission logic. Mapping:
 | SQLite mechanism | Admission rule | Vespa equivalent | Status |
 |---|---|---|---|
 | `expires_at` sweep (client) | NIP-40 expiry | **GC selection** (`selection="event.expires_at > now()"`) | **SHIPPED** — validated live |
-| `UNIQUE (id)` | duplicate insert | docid identity + **test-and-set** insert-if-absent | possible, 1 RTT, design below |
+| `UNIQUE (id)` | duplicate insert | docid identity + **test-and-set** insert-if-absent | **MEASURED, NOT SHIPPED** — slower (below) |
 | `UNIQUE (kind, pubkey[, d_tag])` + replace | replaceable/addressable supersession | **address-keyed docid + test-and-set condition** | design below |
 | trigger-like module (`DeletionRequestModule`) | NIP-09 tombstone block | **document processor** (custom Java in the container) | roadmap |
 | trigger-like module (`RightToVanishModule`) | NIP-62 vanish block | **document processor** | roadmap |
@@ -49,10 +49,30 @@ Every Vespa write (put/update/remove) accepts a `condition` — a selection
 evaluated **server-side against the existing document with the same docid**,
 atomically. Two admission rules fit inside it:
 
-- **Insert-if-absent (the dup probe).** An update with `create=true` and
-  condition `false` creates the document when absent and fails with
-  `TestAndSetFailed` when present — one round trip that both writes and
-  reports "duplicate", replacing the separate `get`.
+- **Insert-if-absent (the dup probe) — built, measured, NOT shipped.** A put
+  with `create=true` and an always-false condition creates the document when
+  absent and answers 412/`conditionNotMet` when present — one round trip that
+  both writes and reports "duplicate", replacing the separate `get`. The full
+  implementation (EventIndex.putIfAbsent through the feed client, the mock,
+  the reference, the store) passed all tests and 127/127 parity, and the
+  round-trip counter confirmed 3.25 → 2.25 engine reads/event. But the
+  interleaved wall-clock A/B on a live engine (2,000 fresh + 2,000 duplicate
+  per-event inserts per arm, code versions alternated against the same
+  corpus) went the other way:
+
+  | path | get-probe (shipped) | test-and-set | delta |
+  |---|---:|---:|---|
+  | fresh insert | 79.0 / 87.0 ev/s | 67.9 / 67.4 ev/s | **15–20% slower** |
+  | duplicate re-insert | 310.5 / 323.3 ev/s | 218.1 / 192.9 ev/s | **~35% slower** |
+
+  Two causes: Vespa's conditional writes pay a read-for-write check even when
+  the document is absent, and duplicates LOSE their cheap early exit — the
+  dup `get` rides the concurrent guard wave (1 round trip total, no write
+  attempt), while the conditional path pays guards + a full write. Fewer
+  engine *ops* is not fewer *milliseconds* here. Reverted; the probe tool
+  (`BENCH_INSERT_PROBE`) and the duplicate-reinsert benchmark case remain for
+  re-testing on future engine versions or multi-node clusters (where a
+  client↔cluster round trip costs more and the trade could flip).
 - **Supersession, if replaceables were keyed by address.** Today every doc's
   id is the event id, so replacing kind 0/3/10002/3xxxx requires a search for
   the incumbent + a remove + a put. If replaceable/addressable events used
@@ -96,7 +116,8 @@ round-trips/event and would not benefit).
 The batch path already solved this problem for bulk ingest (chunked guard
 reads amortized across 500 events). These mechanisms matter for the
 *per-event* path — a relay accepting one EVENT at a time from a websocket —
-where the guard-read round trip is the latency floor. Order of value:
-GC selection (shipped, free) → test-and-set dup fold (small, contained) →
-address-keyed replaceables (refactor, modest win) → docproc admission (big
-lever, big project).
+where the guard-read round trip is the latency floor. Order of value after
+measurement: GC selection (shipped, free) → docproc admission (the one lever
+that actually removes a client round trip; big project) → address-keyed
+replaceables (refactor, modest win). The test-and-set dup fold is measured
+out at single-node scale (table above).
