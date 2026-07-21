@@ -42,6 +42,8 @@ import com.vitorpamplona.quartz.nip09Deletions.DeletionEvent
 import com.vitorpamplona.quartz.nip40Expiration.isExpired
 import com.vitorpamplona.quartz.nip50Search.SearchableEvent
 import com.vitorpamplona.quartz.nip62RequestToVanish.RequestToVanishEvent
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
@@ -266,9 +268,19 @@ class NostrEventStore(
         // still broadcasts the insert to live subscribers.
         if (event.kind.isEphemeral()) return
         if (event.isExpired()) throw RejectedException(Rejections.EXPIRED)
-        if (index.get(event.id) != null) throw RejectedException(Rejections.DUPLICATE)
-        rejectIfDeleted(event)
-        rejectIfVanished(event)
+        // The three admission reads — dedup, NIP-09 tombstone, NIP-62 vanish — are
+        // independent, so fire them together: a per-event insert pays ONE round
+        // trip's latency for the guards, not three in series. The results are then
+        // checked in the original precedence (duplicate > deleted > vanished), so
+        // which rejection wins is unchanged.
+        coroutineScope {
+            val existing = async { index.get(event.id) }
+            val deleted = async { isDeleted(event) }
+            val vanished = async { isVanished(event) }
+            if (existing.await() != null) throw RejectedException(Rejections.DUPLICATE)
+            if (deleted.await()) throw RejectedException(Rejections.DELETED)
+            if (vanished.await()) throw RejectedException(Rejections.VANISHED)
+        }
         when (event) {
             is DeletionEvent -> applyDeletion(event)
             is RequestToVanishEvent -> applyVanish(event)
@@ -439,34 +451,41 @@ class NostrEventStore(
 
     // ---- Nostr semantics -------------------------------------------------------
 
+    /** Throwing guards for the bulk fast path's fallback (see [bulkInsert]); the per-event path uses the probes concurrently. */
+    private suspend fun rejectIfDeleted(event: Event) {
+        if (isDeleted(event)) throw RejectedException(Rejections.DELETED)
+    }
+
+    private suspend fun rejectIfVanished(event: Event) {
+        if (isVanished(event)) throw RejectedException(Rejections.VANISHED)
+    }
+
     /**
      * NIP-09: a kind 5 authored by this event's OWNER, e/a-tagging it, with
      * created_at >= the event's, blocks the insert. Both target styles (e-tag
      * and a-tag) are time-guarded.
      */
-    private suspend fun rejectIfDeleted(event: Event) {
+    private suspend fun isDeleted(event: Event): Boolean {
         // NIP-09/NIP-62: a deletion request against a deletion request or a
         // request to vanish has no effect — they are immune to kind-5 tombstones.
-        if (event is DeletionEvent || event is RequestToVanishEvent) return
+        if (event is DeletionEvent || event is RequestToVanishEvent) return false
         val owner = event.owner()
 
         suspend fun deletionExists(
             tagKey: String,
             value: String,
         ): Boolean = index.search(EventQuery(kinds = listOf(DeletionEvent.KIND), authors = listOf(owner), tags = mapOf(tagKey to listOf(value)), since = event.createdAt, limit = 1)).isNotEmpty()
-        if (deletionExists("e", event.id)) throw RejectedException(Rejections.DELETED)
-        val address = event.addressOrNull() ?: return
-        if (deletionExists("a", address)) throw RejectedException(Rejections.DELETED)
+        if (deletionExists("e", event.id)) return true
+        val address = event.addressOrNull() ?: return false
+        return deletionExists("a", address)
     }
 
     /** NIP-62: a stored vanish request by this event's OWNER covering [relay] blocks their events up to its time. */
-    private suspend fun rejectIfVanished(event: Event) {
+    private suspend fun isVanished(event: Event): Boolean {
         val vanishes = index.search(EventQuery(kinds = listOf(RequestToVanishEvent.KIND), authors = listOf(event.owner()), since = event.createdAt))
-        val blocked =
-            vanishes.any { doc ->
-                (Event.fromJsonOrNull(doc.toEventJson()) as? RequestToVanishEvent)?.shouldVanishFrom(relay) == true
-            }
-        if (blocked) throw RejectedException(Rejections.VANISHED)
+        return vanishes.any { doc ->
+            (Event.fromJsonOrNull(doc.toEventJson()) as? RequestToVanishEvent)?.shouldVanishFrom(relay) == true
+        }
     }
 
     /**
