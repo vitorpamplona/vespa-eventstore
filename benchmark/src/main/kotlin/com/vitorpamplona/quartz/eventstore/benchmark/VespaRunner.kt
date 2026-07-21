@@ -51,19 +51,31 @@ object VespaRunner {
         println("REAL VESPA @ $url")
         println("=".repeat(72))
 
+        // Fast-iteration flags. For a CLIENT-side change (EventYql, summary fields)
+        // the stored data is unchanged, so BENCH_VESPA_SKIP_INGEST reuses the
+        // already-loaded corpus. BENCH_VESPA_SKIP_PEREVENT leaves the store exactly
+        // equal to the corpus (no id-band-2 extras), so parity stays valid across
+        // repeated query-only runs. A SCHEMA change still needs a fresh ingest.
+        val skipIngest = System.getenv("BENCH_VESPA_SKIP_INGEST") != null
+        val skipPerEvent = System.getenv("BENCH_VESPA_SKIP_PEREVENT") != null
+
         val store: IEventStore = VespaEventStore.open(url)
         try {
             awaitServing(store)
 
             // --- bulk ingest (the path the framework is built around) ---
-            println("ingesting ${corpus.size} events via batchInsert($batch) ...")
-            val ingestNanos =
-                measureNanoTime {
-                    runBlocking { corpus.chunked(batch).forEach { store.batchInsert(it) } }
-                }
-            report("batchInsert($batch)", corpus.size, ingestNanos)
-            // Let the write path settle so counts/queries see the full corpus.
-            delay(1_000)
+            if (!skipIngest) {
+                println("ingesting ${corpus.size} events via batchInsert($batch) ...")
+                val ingestNanos =
+                    measureNanoTime {
+                        runBlocking { corpus.chunked(batch).forEach { store.batchInsert(it) } }
+                    }
+                report("batchInsert($batch)", corpus.size, ingestNanos)
+                // Let the write path settle so counts/queries see the full corpus.
+                delay(1_000)
+            } else {
+                println("(skipping ingest — reusing the loaded corpus)")
+            }
             println("store now reports count(all) ≈ ${runCatching { store.count(Filter()) }.getOrDefault(-1)}")
 
             // Correctness gate the user asked for: real Vespa must answer every
@@ -88,13 +100,16 @@ object VespaRunner {
             timeQuery("nip50-search", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), search = w.term(i), limit = 50)) }
 
             // --- per-event insert() on an id-disjoint corpus (no dedup collisions) ---
-            val extra = NostrCorpus.generate(NostrCorpus.Config(size = (corpus.size / 10).coerceIn(1_000, 5_000), seed = seed + 1, idBand = 0x2L))
-            println("\nper-event insert() of ${extra.size} fresh events onto the loaded index ...")
-            val singleNanos =
-                measureNanoTime {
-                    runBlocking { for (e in extra) runCatching { store.insert(e) } }
-                }
-            report("insert()", extra.size, singleNanos)
+            // Skipped in query-only iteration so the store stays == corpus for parity.
+            if (!skipPerEvent) {
+                val extra = NostrCorpus.generate(NostrCorpus.Config(size = (corpus.size / 10).coerceIn(1_000, 5_000), seed = seed + 1, idBand = 0x2L))
+                println("\nper-event insert() of ${extra.size} fresh events onto the loaded index ...")
+                val singleNanos =
+                    measureNanoTime {
+                        runBlocking { for (e in extra) runCatching { store.insert(e) } }
+                    }
+                report("insert()", extra.size, singleNanos)
+            }
         } finally {
             store.close()
         }

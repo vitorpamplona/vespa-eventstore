@@ -62,6 +62,10 @@ object EventStoreBenchmark {
         val seed = System.getenv("BENCH_SEED")?.toLongOrNull() ?: 42L
         val vespaUrl = System.getenv("BENCH_VESPA_URL")
 
+        // Iterate on the Vespa query path without re-running the SQLite/InMemory
+        // sections each time (they don't change). Corpus + real Vespa only.
+        val vespaOnly = System.getenv("BENCH_VESPA_ONLY") != null
+
         println("Generating corpus: size=$size authors≈${size / 20} seed=$seed ...")
         val corpus = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed))
         val refCorpus = corpus.take(refSize)
@@ -70,44 +74,46 @@ object EventStoreBenchmark {
         // Query workload parameters sampled from the corpus (stable across backends).
         val workload = Workload.from(corpus)
 
-        println("\n" + "=".repeat(72))
-        println("ROUND-TRIP AMPLIFICATION  (engine calls the store makes; engine-independent)")
-        println("=".repeat(72))
-        roundTripAnalysis(refCorpus, batch)
+        if (!vespaOnly) {
+            println("\n" + "=".repeat(72))
+            println("ROUND-TRIP AMPLIFICATION  (engine calls the store makes; engine-independent)")
+            println("=".repeat(72))
+            roundTripAnalysis(refCorpus, batch)
 
-        println("\n" + "=".repeat(72))
-        println("INSERT THROUGHPUT")
-        println("=".repeat(72))
-        Table.header()
-        // SQLite: the real embedded-DB numbers, the honest comparison point.
-        measureInserts("SQLite (memory)", corpus, batch) { Backends.sqliteMemory() }
-        val diskFile = File.createTempFile("bench-events", ".db").also { it.delete() }
-        try {
-            measureInserts("SQLite (disk)", corpus, batch) { Backends.sqliteDisk(diskFile.path) }
-        } finally {
-            diskFile.delete()
-            File(diskFile.path + "-wal").delete()
-            File(diskFile.path + "-shm").delete()
+            println("\n" + "=".repeat(72))
+            println("INSERT THROUGHPUT")
+            println("=".repeat(72))
+            Table.header()
+            // SQLite: the real embedded-DB numbers, the honest comparison point.
+            measureInserts("SQLite (memory)", corpus, batch) { Backends.sqliteMemory() }
+            val diskFile = File.createTempFile("bench-events", ".db").also { it.delete() }
+            try {
+                measureInserts("SQLite (disk)", corpus, batch) { Backends.sqliteDisk(diskFile.path) }
+            } finally {
+                diskFile.delete()
+                File(diskFile.path + "-wal").delete()
+                File(diskFile.path + "-shm").delete()
+            }
+            // Vespa reference engine (O(n) scans) — labelled, capped to refSize.
+            measureInserts("Vespa/InMemory ref* (n=$refSize)", refCorpus, batch) { Backends.vespaInMemory() }
+
+            println("\n" + "=".repeat(72))
+            println("QUERY THROUGHPUT  (store pre-loaded with the full corpus)")
+            println("=".repeat(72))
+            runQuerySuite("SQLite (memory)", corpus, workload, queries) { Backends.sqliteMemory() }
+            runQuerySuite("Vespa/InMemory ref* (n=$refSize)", refCorpus, Workload.from(refCorpus), queries / 4) { Backends.vespaInMemory() }
+
+            println("\n* Vespa/InMemory ref is the store over an O(n)-scan in-memory engine: a")
+            println("  correctness reference, NOT a throughput proxy for real Vespa. Read its")
+            println("  round-trip counts (above), not its wall-clock. Set BENCH_VESPA_URL for")
+            println("  real engine numbers.")
+
+            // Correctness gate: SQLite and the store must agree on every NIP-01 filter.
+            println("\n" + "=".repeat(72))
+            println("PARITY  (identical NIP-01 answers — correctness gate)")
+            println("=".repeat(72))
+            parity("Vespa/InMemory", Backends.vespaInMemory(), refCorpus)
         }
-        // Vespa reference engine (O(n) scans) — labelled, capped to refSize.
-        measureInserts("Vespa/InMemory ref* (n=$refSize)", refCorpus, batch) { Backends.vespaInMemory() }
-
-        println("\n" + "=".repeat(72))
-        println("QUERY THROUGHPUT  (store pre-loaded with the full corpus)")
-        println("=".repeat(72))
-        runQuerySuite("SQLite (memory)", corpus, workload, queries) { Backends.sqliteMemory() }
-        runQuerySuite("Vespa/InMemory ref* (n=$refSize)", refCorpus, Workload.from(refCorpus), queries / 4) { Backends.vespaInMemory() }
-
-        println("\n* Vespa/InMemory ref is the store over an O(n)-scan in-memory engine: a")
-        println("  correctness reference, NOT a throughput proxy for real Vespa. Read its")
-        println("  round-trip counts (above), not its wall-clock. Set BENCH_VESPA_URL for")
-        println("  real engine numbers.")
-
-        // Correctness gate: SQLite and the store must agree on every NIP-01 filter.
-        println("\n" + "=".repeat(72))
-        println("PARITY  (identical NIP-01 answers — correctness gate)")
-        println("=".repeat(72))
-        parity("Vespa/InMemory", Backends.vespaInMemory(), refCorpus)
 
         // Real Vespa: a shared external store, so it gets its own no-reinsertion flow.
         if (vespaUrl != null) VespaRunner.run(vespaUrl, corpus, batch, queries, seed)

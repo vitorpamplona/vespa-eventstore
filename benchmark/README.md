@@ -131,6 +131,32 @@ ranking, once trust data and scale enter the picture.
 Practical read: **don't reach for Vespa until you outgrow SQLite.** Below a few
 hundred-k events on one box, Quartz's SQLite store is faster and simpler.
 
+## Query-path optimizations (applied)
+
+Profiling the live Vespa (via `presentation.timing` and payload sizing) showed
+per-query latency is dominated by **server-side matching plus fixed overhead**
+(2–7 ms) and, for large result sets, **payload transfer + client-side parse**;
+network RTT and summary-fetch are small. Single-node throughput is also very
+noisy (±15–50 % run to run — even a query whose code never changed swings that
+much), so only structural changes are reliably attributable. Two landed:
+
+1. **Trim the returned summary to the reconstruction fields** (`EventYql`): a
+   served event needs only `id/pubkey/created_at/kind/tags/content/sig/owner`, so
+   the query selects those instead of `*`. That drops the BM25 index fields —
+   `search_text` (a full copy of note content), `name`, `about`, the `_gram`
+   views — from every hit: **~35 % fewer bytes** on a 200-hit note scan, more on
+   long-form content.
+2. **Pure-id lookups use the document API's direct key get** (`VespaEventIndex`)
+   instead of a `/search/` over the id attribute: **≈35–55 % faster per id**
+   (raw `get` 3.8 ms vs search-by-id 5.9 ms). Capped at one concurrent get wave
+   so the bulk-insert dedup preload (500-id chunks) stays on the single-search
+   path and **ingest is unaffected**.
+
+Both are gated by the parity harness (119/119) and the vespa test suite (39/39).
+Measured id-lookup gain: **+34–65 %** across runs. Server-side matching and the
+NIP-50 ranking cost are inherent to the engine and were left alone (search
+relevance is a feature, not overhead to cut).
+
 ## Correctness parity (SQLite ↔ this store)
 
 The benchmark is also a **correctness gate**: `ParityCheck` loads the identical
