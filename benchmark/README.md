@@ -185,14 +185,19 @@ flushes in the background — the steady-state number is the representative one.
   bytes to parse per hit.
 - **`getByIds` short-circuits the single-id REQ** past the `mapBounded` fan-out
   (coroutineScope + Semaphore + async all allocate per call).
-- The **floor is the reconstruction round-trip**: the store returns *typed*
-  subclasses (MetadataEvent, TextNoteEvent, …) — verified identical to SQLite's —
-  and Quartz only builds those via `Event.fromJson(String)`, so every result is
-  `EventDoc → JSON string → typed Event` (a serialize + parse). That is the bulk
-  of `bytes/event`. Removing it safely needs a Quartz **kind→fields factory**
-  (construct the typed event directly, no JSON) — a recommended upstream API, not
-  something to hand-roll here (a wrong kind→class map would silently mis-type
-  results). A lazy raw-tags path on `EventDoc` would shave the double tag parse.
+- **Direct reconstruction of high-volume kinds** (applied): the store used to
+  rebuild every result via `Event.fromJson(toEventJson())` — a serialize+parse
+  round trip whose only job is to recover the typed subclass (MetadataEvent,
+  TextNoteEvent, … — verified identical to SQLite's). `toEvent()` now maps the
+  high-volume kinds (notes, reactions, profiles, deletions, long-form) straight
+  to their constructor — one allocation, no JSON — and falls back to `fromJson`
+  for the long tail, so correctness never depends on the table being complete.
+  `EventReconstructionTest` pins each mapped kind to `fromJson`'s exact subclass
+  and serialization. Measured: **kind-scan 9,230 → 6,181 bytes/event (−33%)**,
+  author-timeline 12,800 → 9,887 (−23%).
+- Remaining floor for tiny results (id-lookup ~46 KB/event): the Vespa response
+  is parsed into a full immutable `JsonElement` tree per query. A streaming
+  decode and a lazy raw-tags path on `EventDoc` would shave it further.
 
 ### Vespa config studied
 
