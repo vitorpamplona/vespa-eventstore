@@ -161,7 +161,8 @@ class VespaEventIndex(
         // response is decoded into flat DTOs, allocating the target objects
         // directly instead of a JsonObject/JsonArray/JsonPrimitive wrapper per
         // field. This is the query hot path, so that saved garbage matters.
-        return DECODER.decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
+        return DECODER
+            .decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
             .root.children
             .mapNotNull { it.fields?.toDoc() }
     }
@@ -182,15 +183,21 @@ class VespaEventIndex(
 
     /** Resolve [EventQuery.ids] through parallel document-API gets, then filter expiry, order, and cap like the search path. */
     private suspend fun getByIds(query: EventQuery): List<EventDoc> {
-        val hexes = query.ids.map { it.lowercase() }.filter(Hex::isHex64).distinct()
+        val hexes =
+            query.ids
+                .map { it.lowercase() }
+                .filter(Hex::isHex64)
+                .distinct()
         val docs =
             when {
                 hexes.isEmpty() -> return emptyList()
+
                 // The overwhelmingly common REQ-by-id is a SINGLE id: skip the
                 // fan-out machinery (coroutineScope + Semaphore + async/awaitAll
                 // allocate per call) and just get it. At thousands of id lookups a
                 // second that saved garbage is the difference the GC feels.
                 hexes.size == 1 -> listOfNotNull(get(hexes[0]))
+
                 else -> hexes.mapBounded(ID_GET_FANOUT) { get(it) }.filterNotNull()
             }
         // NIP-40: never serve an event already expired at the query's cutoff — the

@@ -72,7 +72,7 @@ object EventStoreBenchmark {
         printMix(corpus)
 
         // Query workload parameters sampled from the corpus (stable across backends).
-        val workload = Workload.from(corpus)
+        val workload = BenchWorkload.from(corpus)
 
         if (!vespaOnly) {
             println("\n" + "=".repeat(72))
@@ -101,7 +101,7 @@ object EventStoreBenchmark {
             println("QUERY THROUGHPUT  (store pre-loaded with the full corpus)")
             println("=".repeat(72))
             runQuerySuite("SQLite (memory)", corpus, workload, queries) { Backends.sqliteMemory() }
-            runQuerySuite("Vespa/InMemory ref* (n=$refSize)", refCorpus, Workload.from(refCorpus), queries / 4) { Backends.vespaInMemory() }
+            runQuerySuite("Vespa/InMemory ref* (n=$refSize)", refCorpus, BenchWorkload.from(refCorpus), queries / 4) { Backends.vespaInMemory() }
 
             println("\n* Vespa/InMemory ref is the store over an O(n)-scan in-memory engine: a")
             println("  correctness reference, NOT a throughput proxy for real Vespa. Read its")
@@ -153,13 +153,19 @@ object EventStoreBenchmark {
         val n = corpus.size.toDouble()
         println("corpus for this section: ${corpus.size} events\n")
         println(String.format("%-14s %12s %12s %12s %12s %12s", "path", "reads", "writes", "total", "rt/event", "reads/event"))
+
         fun row(
             name: String,
             c: CountingEventIndex,
         ) = println(
             String.format(
                 "%-14s %12d %12d %12d %12.2f %12.2f",
-                name, c.reads(), c.writeCalls(), c.total(), c.total() / n, c.reads() / n,
+                name,
+                c.reads(),
+                c.writeCalls(),
+                c.total(),
+                c.total() / n,
+                c.reads() / n,
             ),
         )
         row("insert()", perEventCounter)
@@ -202,7 +208,7 @@ object EventStoreBenchmark {
     private fun runQuerySuite(
         name: String,
         corpus: List<Event>,
-        workload: Workload,
+        workload: BenchWorkload,
         reps: Int,
         factory: () -> IEventStore,
     ) = runBlocking {
@@ -218,6 +224,17 @@ object EventStoreBenchmark {
         query("profile(kind0)", reps) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(workload.author(i)), limit = 1)) }
         query("count(reactions)", reps) { store.count(Filter(kinds = listOf(7))) }
         query("nip50-search", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), search = workload.term(i), limit = 50)) }
+
+        // LIST-shaped REQs — what clients actually subscribe with: a follow-feed
+        // (the observer's whole contact list as authors), an id-set fetch (a
+        // thread), a wide #p list (notifications for everyone you follow), and a
+        // contact-sync (profiles+contacts+relay lists for a list of authors).
+        // Fewer reps: each does hundreds of times the work of a point lookup.
+        val listReps = (reps / 4).coerceAtLeast(25)
+        query("follow-feed(a300)", listReps) { i -> store.query<Event>(Filter(authors = workload.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500)) }
+        query("ids-set(100)", listReps) { i -> store.query<Event>(Filter(ids = workload.idList(i, 100))) }
+        query("tag-list(p100)", listReps) { i -> store.query<Event>(Filter(kinds = listOf(1, 7), tags = mapOf("p" to workload.pList(i, 100)), limit = 300)) }
+        query("contact-sync(a100)", listReps) { i -> store.query<Event>(Filter(authors = workload.authorList(i, 100), kinds = listOf(0, 3, 10002), limit = 300)) }
 
         store.close()
     }
@@ -243,28 +260,6 @@ object EventStoreBenchmark {
     }
 
     // ---- helpers -----------------------------------------------------------
-
-    /** Sampled, stable query parameters drawn from the corpus. */
-    private class Workload(
-        private val authors: List<String>,
-        private val ids: List<String>,
-        private val terms: List<String>,
-    ) {
-        fun author(i: Int) = authors[i % authors.size]
-
-        fun id(i: Int) = ids[i % ids.size]
-
-        fun term(i: Int) = terms[i % terms.size]
-
-        companion object {
-            fun from(corpus: List<Event>): Workload {
-                val authors = corpus.map { it.pubKey }.distinct().shuffled(kotlin.random.Random(1)).take(500)
-                val ids = corpus.map { it.id }.shuffled(kotlin.random.Random(2)).take(500)
-                val terms = "nostr bitcoin coffee freedom relay privacy vespa trust".split(" ")
-                return Workload(authors.ifEmpty { listOf("a".repeat(64)) }, ids.ifEmpty { listOf("0".repeat(64)) }, terms)
-            }
-        }
-    }
 
     private fun printMix(corpus: List<Event>) {
         val byKind = corpus.groupingBy { it.kind }.eachCount().toSortedMap()

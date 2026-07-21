@@ -177,10 +177,21 @@ class EventYqlTest {
 
     @Test
     fun `tag values are OR within a name and AND across names`() {
+        // Multi-value OR compiles to the `in` operator (one dictionary-backed
+        // iterator over the fast-search attribute); a single value stays `contains`.
         val q = EventYql.build(EventQuery(tags = mapOf("p" to listOf(hexA, hexB), "t" to listOf("nostr"))))!!
         assertEquals(
-            "select ${EventYql.SUMMARY_FIELDS} from event where (tag_index contains \"p:$hexA\" or tag_index contains \"p:$hexB\") " +
+            "select ${EventYql.SUMMARY_FIELDS} from event where tag_index in (\"p:$hexA\", \"p:$hexB\") " +
                 "and (tag_index contains \"t:nostr\") order by created_at desc",
+            q.yql,
+        )
+    }
+
+    @Test
+    fun `a wide tag list compiles to one in-list, values escaped`() {
+        val q = EventYql.build(EventQuery(tags = mapOf("e" to listOf("v1", "v\"2", "v3"))))!!
+        assertEquals(
+            "select ${EventYql.SUMMARY_FIELDS} from event where tag_index in (\"e:v1\", \"e:v\\\"2\", \"e:v3\") order by created_at desc",
             q.yql,
         )
     }

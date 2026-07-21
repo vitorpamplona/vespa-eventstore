@@ -118,9 +118,19 @@ object ParityCheck {
         val tMid = times[times.size / 2]
         val tLo = times[times.size / 4]
         val tHi = times[times.size * 3 / 4]
-        // A #p tag value that actually occurs, and an #e value.
-        val pTag = corpus.firstNotNullOfOrNull { e -> e.tags.firstOrNull { it.size >= 2 && it[0] == "p" }?.get(1) }
-        val eTag = corpus.firstNotNullOfOrNull { e -> e.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1) }
+        // Tag values that actually occur (for single-value and LIST tag filters).
+        val pVals =
+            corpus
+                .flatMap { e -> e.tags.filter { it.size >= 2 && it[0] == "p" }.map { it[1] } }
+                .distinct()
+                .shuffled(kotlin.random.Random(9))
+        val eVals =
+            corpus
+                .flatMap { e -> e.tags.filter { it.size >= 2 && it[0] == "e" }.map { it[1] } }
+                .distinct()
+                .shuffled(kotlin.random.Random(10))
+        val pTag = pVals.firstOrNull()
+        val eTag = eVals.firstOrNull()
 
         val specs = ArrayList<Spec>()
         // Kind scans (recall + newest-first order).
@@ -144,6 +154,16 @@ object ParityCheck {
         // Tag filters.
         if (pTag != null) specs += Spec("#p", Filter(kinds = listOf(1), tags = mapOf("p" to listOf(pTag)), limit = 100))
         if (eTag != null) specs += Spec("#e", Filter(tags = mapOf("e" to listOf(eTag)), limit = 100))
+        // LIST-shaped filters — the shapes a client actually subscribes with
+        // (follow-feed REQs with hundreds of authors, id-set fetches, big tag
+        // value lists). These gate the store's list-query paths (the `in`
+        // operator YQL, the id fan-out cutover) against SQLite recall.
+        specs += Spec("follow-feed authors x300 kinds[1,6,7]", Filter(authors = authors.take(300), kinds = listOf(1, 6, 7), limit = 500))
+        specs += Spec("contact-sync authors x100 kinds[0,3,10002]", Filter(authors = authors.take(100), kinds = listOf(0, 3, 10002), limit = 300))
+        specs += Spec("ids x100", Filter(ids = ids.take(100)))
+        if (pVals.size >= 2) specs += Spec("#p x${pVals.take(100).size}", Filter(tags = mapOf("p" to pVals.take(100)), limit = 300))
+        if (eVals.size >= 2) specs += Spec("#e x${eVals.take(50).size}", Filter(tags = mapOf("e" to eVals.take(50)), limit = 200))
+        specs += Spec("count follow-feed", Filter(authors = authors.take(300), kinds = listOf(1, 6, 7)), countOnly = true)
         // Time windows.
         specs += Spec("since", Filter(kinds = listOf(1), since = tMid, limit = 200))
         specs += Spec("until", Filter(kinds = listOf(1), until = tMid, limit = 200))

@@ -124,17 +124,39 @@ object NostrCorpus {
 
             val draft =
                 when (picker.next()) {
-                    Kind.NOTE -> note(rnd, allRecent)
-                    Kind.REACTION -> reaction(rnd, allRecent)
-                    Kind.REPOST -> repost(rnd, allRecent)
-                    Kind.METADATA -> metadata(rnd)
-                    Kind.CONTACTS -> contacts(rnd, authors)
-                    Kind.RELAY_LIST -> relayList()
-                    Kind.LONG_FORM -> longForm(rnd, dTagsByAuthor.getOrPut(author) { ArrayList() })
-                    Kind.DELETION ->
+                    Kind.NOTE -> {
+                        note(rnd, allRecent)
+                    }
+
+                    Kind.REACTION -> {
+                        reaction(rnd, allRecent)
+                    }
+
+                    Kind.REPOST -> {
+                        repost(rnd, allRecent)
+                    }
+
+                    Kind.METADATA -> {
+                        metadata(rnd)
+                    }
+
+                    Kind.CONTACTS -> {
+                        contacts(rnd, authors)
+                    }
+
+                    Kind.RELAY_LIST -> {
+                        relayList()
+                    }
+
+                    Kind.LONG_FORM -> {
+                        longForm(rnd, dTagsByAuthor.getOrPut(author) { ArrayList() })
+                    }
+
+                    Kind.DELETION -> {
                         // No prior same-author target yet -> emit a note instead, so the
                         // corpus size stays exact and deletions always erase something real.
                         recentByAuthor[author]?.lastOrNull()?.let { deletion(it) } ?: note(rnd, allRecent)
+                    }
                 }
 
             out += Event.fromJson(event(id, author, clock, draft))

@@ -89,15 +89,25 @@ object VespaRunner {
 
             // --- queries over the loaded corpus ---
             println("\n-- queries (BM25 search is real here, not a substring scan) --")
-            val w = workloadFrom(corpus)
+            val w = BenchWorkload.from(corpus)
             Header.query()
-            timeQuery("author-timeline", queries) { i -> store.query<Event>(Filter(authors = listOf(w.a(i)), limit = 50)) }
+            timeQuery("author-timeline", queries) { i -> store.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50)) }
             timeQuery("kind-scan(notes)", queries) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)) }
-            timeQuery("tag-mentions(p)", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(w.a(i))), limit = 50)) }
+            timeQuery("tag-mentions(p)", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(w.author(i))), limit = 50)) }
             timeQuery("id-lookup", queries) { i -> store.query<Event>(Filter(ids = listOf(w.id(i)))) }
-            timeQuery("profile(kind0)", queries) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(w.a(i)), limit = 1)) }
+            timeQuery("profile(kind0)", queries) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(w.author(i)), limit = 1)) }
             timeQuery("count(reactions)", queries) { store.count(Filter(kinds = listOf(7))) }
             timeQuery("nip50-search", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), search = w.term(i), limit = 50)) }
+
+            // LIST-shaped REQs — the follow-feed / id-set / wide-#p / contact-sync
+            // filters clients actually send (same shapes as the local suite, so
+            // the SQLite and real-Vespa numbers line up). Fewer reps: each query
+            // matches hundreds of times more than a point lookup.
+            val listReps = (queries / 4).coerceAtLeast(25)
+            timeQuery("follow-feed(a300)", listReps) { i -> store.query<Event>(Filter(authors = w.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500)) }
+            timeQuery("ids-set(100)", listReps) { i -> store.query<Event>(Filter(ids = w.idList(i, 100))) }
+            timeQuery("tag-list(p100)", listReps) { i -> store.query<Event>(Filter(kinds = listOf(1, 7), tags = mapOf("p" to w.pList(i, 100)), limit = 300)) }
+            timeQuery("contact-sync(a100)", listReps) { i -> store.query<Event>(Filter(authors = w.authorList(i, 100), kinds = listOf(0, 3, 10002), limit = 300)) }
 
             // Concurrent throughput — the metric a relay lives on (target 50k events/sec).
             if (System.getenv("BENCH_THROUGHPUT") != null) {
@@ -133,25 +143,6 @@ object VespaRunner {
         }
         println("WARNING: vespa did not confirm serving in 120s; proceeding anyway.")
     }
-
-    private class W(
-        val authors: List<String>,
-        val ids: List<String>,
-        val terms: List<String>,
-    ) {
-        fun a(i: Int) = authors[i % authors.size]
-
-        fun id(i: Int) = ids[i % ids.size]
-
-        fun term(i: Int) = terms[i % terms.size]
-    }
-
-    private fun workloadFrom(corpus: List<Event>) =
-        W(
-            corpus.map { it.pubKey }.distinct().shuffled(kotlin.random.Random(1)).take(500).ifEmpty { listOf("a".repeat(64)) },
-            corpus.map { it.id }.shuffled(kotlin.random.Random(2)).take(500).ifEmpty { listOf("0".repeat(64)) },
-            "nostr bitcoin coffee freedom relay privacy vespa trust".split(" "),
-        )
 
     private inline fun timeQuery(
         name: String,
