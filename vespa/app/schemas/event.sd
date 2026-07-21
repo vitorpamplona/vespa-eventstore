@@ -31,14 +31,36 @@ schema event {
 
     document event {
 
+        # The exact-match filter attributes (id/pubkey/owner/tag_index) share two
+        # settings beyond fast-search:
+        #  - `match: cased`. Vespa string attributes match UNCASED by default,
+        #    which silently diverged from NIP-01/SQLite semantics (tag values and
+        #    hex compare by exact bytes; SQLite's tag_hash is case-sensitive):
+        #    a stored `t:MixedCase` matched a `#t:["mixedcase"]` filter. Cased
+        #    matching restores byte equality — and agrees with the in-memory
+        #    reference and the SQLite store, which were always case-sensitive.
+        #    (Query-side hex is normalized to lowercase by the client, matching
+        #    the lowercase hex both stores hold.)
+        #  - `dictionary: hash` (requires cased). These fields are only ever
+        #    equality/`in`-matched — never range- or prefix-scanned — so the
+        #    default B-tree dictionary buys nothing; a hash dictionary makes
+        #    each term lookup O(1) instead of O(log #unique-terms). Measured
+        #    noise-level at a 30k corpus (B-tree depth is tiny); the headroom is
+        #    for real corpora, where unique terms grow with every event (each id
+        #    is unique). A/B'd against the B-tree default and `rank: filter`
+        #    (rejected: no read win, slower feeds) — see benchmark/README.md.
         field id type string {
             indexing: attribute | summary
             attribute: fast-search
+            match { cased }
+            dictionary { hash }
         }
 
         field pubkey type string {
             indexing: attribute | summary
             attribute: fast-search
+            match { cased }
+            dictionary { hash }
         }
 
         field created_at type long {
@@ -61,6 +83,8 @@ schema event {
         field tag_index type array<string> {
             indexing: attribute | summary
             attribute: fast-search
+            match { cased }
+            dictionary { hash }
         }
 
         # Exact event content — reconstruction only. Search never runs against
@@ -80,6 +104,8 @@ schema event {
         field owner type string {
             indexing: attribute | summary
             attribute: fast-search
+            match { cased }
+            dictionary { hash }
         }
 
         # NIP-40: derived from the expiration tag at feed time, so the expiry
@@ -559,5 +585,39 @@ schema event {
     }
 
     rank-profile text inherits text_relevance {
+    }
+
+    # TWO-PHASE variant of `text` (A/B under measurement; see
+    # docs/two-phase-ranking.html). Phase 1 scores every match with
+    # relevance() MINUS its two expensive within-band tie-breakers —
+    # fieldMatch proximity (a positional analysis per field per hit) and the
+    # match-quality ladder (itemRawScore, currently inert anyway) — which
+    # keeps BAND membership exact: the dropped terms (≤ ~280 points) can
+    # never cross the 1100-point token-match band gap. Phase 2 re-applies the
+    # full tuned relevance() to the top rerank-count hits per node, restoring
+    # today's exact within-band order inside the window. Query-time override:
+    # `ranking.rerankCount`.
+    rank-profile text2 inherits text_relevance {
+        function relevance_cheap() {
+            expression {
+                any_token_match() * 1100
+                + affiliation_match() * query(w_affil_tier_text)
+                + primary_text()
+                + tier_primary_text()
+                + query(w_secondary) * secondary_text()
+                + query(w_content) * bm25(search_text)
+                + query(w_location) * bm25(search_location)
+                + secondary_active() * query(w_about) * about_text()
+            }
+        }
+
+        first-phase {
+            expression: relevance_cheap()
+        }
+
+        second-phase {
+            expression: relevance()
+            rerank-count: 1000
+        }
     }
 }

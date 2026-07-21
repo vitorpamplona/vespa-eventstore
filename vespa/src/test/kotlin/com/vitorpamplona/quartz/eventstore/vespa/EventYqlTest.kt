@@ -160,6 +160,14 @@ class EventYqlTest {
     }
 
     @Test
+    fun `rerankCount rides out-of-band as a ranking parameter`() {
+        val q = EventYql.build(EventQuery(search = "vitor", ranking = "text2", rerankCount = 500))!!
+        assertEquals("500", q.params["ranking.rerankCount"])
+        assertEquals("text2", q.ranking)
+        assertNull(EventYql.build(EventQuery(kinds = listOf(1)))!!.params["ranking.rerankCount"], "absent unless set")
+    }
+
+    @Test
     fun `owners and expiry map to their attributes`() {
         val q = EventYql.build(EventQuery(owners = listOf(hexA), expiresBefore = 500))!!
         assertEquals("select ${EventYql.SUMMARY_FIELDS} from event where owner in (\"$hexA\") and expires_at < 500 order by created_at desc", q.yql)
@@ -177,10 +185,21 @@ class EventYqlTest {
 
     @Test
     fun `tag values are OR within a name and AND across names`() {
+        // Multi-value OR compiles to the `in` operator (one dictionary-backed
+        // iterator over the fast-search attribute); a single value stays `contains`.
         val q = EventYql.build(EventQuery(tags = mapOf("p" to listOf(hexA, hexB), "t" to listOf("nostr"))))!!
         assertEquals(
-            "select ${EventYql.SUMMARY_FIELDS} from event where (tag_index contains \"p:$hexA\" or tag_index contains \"p:$hexB\") " +
+            "select ${EventYql.SUMMARY_FIELDS} from event where tag_index in (\"p:$hexA\", \"p:$hexB\") " +
                 "and (tag_index contains \"t:nostr\") order by created_at desc",
+            q.yql,
+        )
+    }
+
+    @Test
+    fun `a wide tag list compiles to one in-list, values escaped`() {
+        val q = EventYql.build(EventQuery(tags = mapOf("e" to listOf("v1", "v\"2", "v3"))))!!
+        assertEquals(
+            "select ${EventYql.SUMMARY_FIELDS} from event where tag_index in (\"e:v1\", \"e:v\\\"2\", \"e:v3\") order by created_at desc",
             q.yql,
         )
     }

@@ -61,6 +61,7 @@ object VespaRunner {
 
         val store: IEventStore = VespaEventStore.open(url)
         try {
+            BenchResults.section("vespa")
             awaitServing(store)
 
             // --- bulk ingest (the path the framework is built around) ---
@@ -89,15 +90,25 @@ object VespaRunner {
 
             // --- queries over the loaded corpus ---
             println("\n-- queries (BM25 search is real here, not a substring scan) --")
-            val w = workloadFrom(corpus)
+            val w = BenchWorkload.from(corpus)
             Header.query()
-            timeQuery("author-timeline", queries) { i -> store.query<Event>(Filter(authors = listOf(w.a(i)), limit = 50)) }
+            timeQuery("author-timeline", queries) { i -> store.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50)) }
             timeQuery("kind-scan(notes)", queries) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)) }
-            timeQuery("tag-mentions(p)", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(w.a(i))), limit = 50)) }
+            timeQuery("tag-mentions(p)", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(w.author(i))), limit = 50)) }
             timeQuery("id-lookup", queries) { i -> store.query<Event>(Filter(ids = listOf(w.id(i)))) }
-            timeQuery("profile(kind0)", queries) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(w.a(i)), limit = 1)) }
+            timeQuery("profile(kind0)", queries) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(w.author(i)), limit = 1)) }
             timeQuery("count(reactions)", queries) { store.count(Filter(kinds = listOf(7))) }
             timeQuery("nip50-search", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), search = w.term(i), limit = 50)) }
+
+            // LIST-shaped REQs — the follow-feed / id-set / wide-#p / contact-sync
+            // filters clients actually send (same shapes as the local suite, so
+            // the SQLite and real-Vespa numbers line up). Fewer reps: each query
+            // matches hundreds of times more than a point lookup.
+            val listReps = (queries / 4).coerceAtLeast(25)
+            timeQuery("follow-feed(a300)", listReps) { i -> store.query<Event>(Filter(authors = w.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500)) }
+            timeQuery("ids-set(100)", listReps) { i -> store.query<Event>(Filter(ids = w.idList(i, 100))) }
+            timeQuery("tag-list(p100)", listReps) { i -> store.query<Event>(Filter(kinds = listOf(1, 7), tags = mapOf("p" to w.pList(i, 100)), limit = 300)) }
+            timeQuery("contact-sync(a100)", listReps) { i -> store.query<Event>(Filter(authors = w.authorList(i, 100), kinds = listOf(0, 3, 10002), limit = 300)) }
 
             // Concurrent throughput — the metric a relay lives on (target 50k events/sec).
             if (System.getenv("BENCH_THROUGHPUT") != null) {
@@ -116,6 +127,18 @@ object VespaRunner {
                         runBlocking { for (e in extra) runCatching { store.insert(e) } }
                     }
                 report("insert()", extra.size, singleNanos)
+
+                // The relay rebroadcast case: clients replay events they saw on
+                // other relays, so a big share of real EVENT traffic is
+                // duplicates. Re-inserting the batch just stored measures the
+                // store's duplicate path (guards + the conditional put that
+                // reports the dup — no separate probe read).
+                println("per-event re-insert of the same ${extra.size} events (all duplicates) ...")
+                val dupNanos =
+                    measureNanoTime {
+                        runBlocking { for (e in extra) runCatching { store.insert(e) } }
+                    }
+                report("insert() duplicates", extra.size, dupNanos)
             }
         } finally {
             store.close()
@@ -134,25 +157,6 @@ object VespaRunner {
         println("WARNING: vespa did not confirm serving in 120s; proceeding anyway.")
     }
 
-    private class W(
-        val authors: List<String>,
-        val ids: List<String>,
-        val terms: List<String>,
-    ) {
-        fun a(i: Int) = authors[i % authors.size]
-
-        fun id(i: Int) = ids[i % ids.size]
-
-        fun term(i: Int) = terms[i % terms.size]
-    }
-
-    private fun workloadFrom(corpus: List<Event>) =
-        W(
-            corpus.map { it.pubKey }.distinct().shuffled(kotlin.random.Random(1)).take(500).ifEmpty { listOf("a".repeat(64)) },
-            corpus.map { it.id }.shuffled(kotlin.random.Random(2)).take(500).ifEmpty { listOf("0".repeat(64)) },
-            "nostr bitcoin coffee freedom relay privacy vespa trust".split(" "),
-        )
-
     private inline fun timeQuery(
         name: String,
         reps: Int,
@@ -160,17 +164,19 @@ object VespaRunner {
     ) = runBlocking {
         repeat((reps / 10).coerceIn(1, 50)) { runCatching { op(it) } }
         var checksum = 0L
+        val lat = Latencies()
         val nanos =
             measureNanoTime {
                 runBlocking {
                     repeat(reps) { i ->
-                        val r = runCatching { op(i) }.getOrNull()
+                        val r = lat.timed { runCatching { op(i) }.getOrNull() }
                         if (r is Collection<*>) checksum += r.size
                     }
                 }
             }
         val secs = nanos / 1e9
-        println(String.format("%-20s %10d %14s %12.2f %10d", name, reps, num(reps / secs), nanos / 1000.0 / reps, checksum))
+        println(String.format("%-20s %10d %14s %12.2f %10d  %s", name, reps, num(reps / secs), nanos / 1000.0 / reps, checksum, lat.summary()))
+        BenchResults.record(name, lat, "qps" to reps / secs, "sum_results" to checksum.toDouble())
     }
 
     private fun report(
@@ -180,10 +186,11 @@ object VespaRunner {
     ) {
         val secs = nanos / 1e9
         println(String.format("%-24s %10d events  %14s events/sec  %10.1f µs/event", op, events, num(events / secs), nanos / 1000.0 / events))
+        BenchResults.record(op, "events_per_sec" to events / secs)
     }
 
     private object Header {
-        fun query() = println(String.format("%-20s %10s %14s %12s %10s", "query", "reps", "queries/sec", "µs/query", "Σresults"))
+        fun query() = println(String.format("%-20s %10s %14s %12s %10s  %s", "query", "reps", "queries/sec", "µs/query", "Σresults", "latency tail"))
     }
 
     private fun num(v: Double) = if (v >= 1000) String.format("%,d", v.toLong()) else String.format("%.1f", v)

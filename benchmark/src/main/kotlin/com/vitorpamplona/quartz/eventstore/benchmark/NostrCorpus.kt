@@ -124,17 +124,39 @@ object NostrCorpus {
 
             val draft =
                 when (picker.next()) {
-                    Kind.NOTE -> note(rnd, allRecent)
-                    Kind.REACTION -> reaction(rnd, allRecent)
-                    Kind.REPOST -> repost(rnd, allRecent)
-                    Kind.METADATA -> metadata(rnd)
-                    Kind.CONTACTS -> contacts(rnd, authors)
-                    Kind.RELAY_LIST -> relayList()
-                    Kind.LONG_FORM -> longForm(rnd, dTagsByAuthor.getOrPut(author) { ArrayList() })
-                    Kind.DELETION ->
+                    Kind.NOTE -> {
+                        note(rnd, allRecent)
+                    }
+
+                    Kind.REACTION -> {
+                        reaction(rnd, allRecent)
+                    }
+
+                    Kind.REPOST -> {
+                        repost(rnd, allRecent)
+                    }
+
+                    Kind.METADATA -> {
+                        metadata(rnd)
+                    }
+
+                    Kind.CONTACTS -> {
+                        contacts(rnd, authors)
+                    }
+
+                    Kind.RELAY_LIST -> {
+                        relayList()
+                    }
+
+                    Kind.LONG_FORM -> {
+                        longForm(rnd, dTagsByAuthor.getOrPut(author) { ArrayList() })
+                    }
+
+                    Kind.DELETION -> {
                         // No prior same-author target yet -> emit a note instead, so the
                         // corpus size stays exact and deletions always erase something real.
                         recentByAuthor[author]?.lastOrNull()?.let { deletion(it) } ?: note(rnd, allRecent)
+                    }
                 }
 
             out += Event.fromJson(event(id, author, clock, draft))
@@ -162,14 +184,22 @@ object NostrCorpus {
         rnd: Random,
         recent: ArrayDeque<Pair<String, String>>,
     ): Draft {
+        val tags = ArrayList<List<String>>()
         // ~30% of notes are replies: e-tag a prior note + p-tag its author.
-        val tags =
-            if (rnd.nextInt(100) < 30 && recent.isNotEmpty()) {
-                val (a, i) = recent.elementAt(rnd.nextInt(recent.size))
-                listOf(listOf("e", i), listOf("p", a))
-            } else {
-                emptyList()
-            }
+        if (rnd.nextInt(100) < 30 && recent.isNotEmpty()) {
+            val (a, i) = recent.elementAt(rnd.nextInt(recent.size))
+            tags += listOf("e", i)
+            tags += listOf("p", a)
+        }
+        // ~20% carry a Capitalized hashtag. NIP-01 tag matching is byte-exact
+        // (SQLite hashes the exact bytes), and Vespa string attributes match
+        // UNCASED unless the schema says `match: cased` — so the corpus keeps
+        // mixed-case tag values in play and the parity battery asserts both
+        // stores treat case identically. The lowercase form never occurs as a
+        // t-tag, so a lowercased filter must match nothing on both stores.
+        if (rnd.nextInt(100) < 20) {
+            tags += listOf("t", VOCAB[rnd.nextInt(VOCAB.size)].replaceFirstChar { it.uppercase() })
+        }
         return Draft(1, tags, sentence(rnd, 6, 24))
     }
 

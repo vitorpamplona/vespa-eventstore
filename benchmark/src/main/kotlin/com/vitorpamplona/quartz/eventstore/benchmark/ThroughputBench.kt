@@ -57,31 +57,44 @@ object ThroughputBench {
         concurrencies: List<Int>,
         durationMs: Long,
     ) = runBlocking {
-        val w = Workload.from(corpus)
+        val w = BenchWorkload.from(corpus)
         val shapes =
             listOf<Triple<String, Int, suspend (Int) -> Int>>(
                 Triple("id-lookup", 1) { i -> store.query<Event>(Filter(ids = listOf(w.id(i)))).size },
                 Triple("author-timeline", 50) { i -> store.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50)).size },
                 Triple("kind-scan(200)", 200) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)).size },
+                // List-shaped REQs under concurrency — the follow-feed is THE
+                // relay workload (every connected client holds one open), and the
+                // id-set fetch is the >ID_GET_FANOUT path (one search, not N gets).
+                Triple("follow-feed(a300)", 500) { i -> store.query<Event>(Filter(authors = w.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500)).size },
+                Triple("ids-set(100)", 100) { i -> store.query<Event>(Filter(ids = w.idList(i, 100))).size },
             )
 
         println("\n-- concurrent throughput (events/sec after warmup; target 50,000) --")
-        println(String.format("%-16s %5s %13s %12s %10s %12s", "query", "conc", "events/sec", "queries/sec", "GC ms", "bytes/event"))
+        println(String.format("%-16s %5s %13s %12s %10s %12s  %s", "query", "conc", "events/sec", "queries/sec", "GC ms", "bytes/event", "latency tail"))
         for ((name, _, op) in shapes) {
             // Warm up this shape (JIT + connection pool) before measuring.
             drive(concurrency = 8, durationMs = (durationMs / 2).coerceAtLeast(1_000), op = op)
             for (c in concurrencies) {
-                val s = drive(c, durationMs, op)
+                val lat = Latencies()
+                val s = drive(c, durationMs, op, lat)
                 val secs = s.wallNanos / 1e9
                 val eps = s.events / secs
                 val qps = s.queries / secs
                 val bytesPerEvent = if (s.events > 0) s.bytesAllocated / s.events else 0
                 println(
                     String.format(
-                        "%-16s %5d %13s %12s %10d %12d",
-                        name, c, num(eps), num(qps), s.gcMillis, bytesPerEvent,
+                        "%-16s %5d %13s %12s %10d %12d  %s",
+                        name,
+                        c,
+                        num(eps),
+                        num(qps),
+                        s.gcMillis,
+                        bytesPerEvent,
+                        lat.summary(),
                     ),
                 )
+                BenchResults.record("$name@$c", lat, "events_per_sec" to eps, "qps" to qps, "bytes_per_event" to bytesPerEvent.toDouble())
             }
         }
     }
@@ -91,9 +104,12 @@ object ThroughputBench {
         concurrency: Int,
         durationMs: Long,
         op: suspend (Int) -> Int,
+        lat: Latencies? = null,
     ): Sample {
         val gcBeans = ManagementFactory.getGarbageCollectorMXBeans()
+
         fun gcCount() = gcBeans.sumOf { it.collectionCount.coerceAtLeast(0) }
+
         fun gcTime() = gcBeans.sumOf { it.collectionTime.coerceAtLeast(0) }
         val threadBean = ManagementFactory.getThreadMXBean() as? com.sun.management.ThreadMXBean
 
@@ -102,8 +118,12 @@ object ThroughputBench {
         val alloc0 = allocatedBytes(threadBean)
         val start = System.nanoTime()
         val deadline = start + durationMs * 1_000_000
-        val queries = java.util.concurrent.atomic.AtomicLong()
-        val events = java.util.concurrent.atomic.AtomicLong()
+        val queries =
+            java.util.concurrent.atomic
+                .AtomicLong()
+        val events =
+            java.util.concurrent.atomic
+                .AtomicLong()
 
         withContext(Dispatchers.Default) {
             repeat(concurrency) { worker ->
@@ -112,7 +132,9 @@ object ThroughputBench {
                     var q = 0L
                     var e = 0L
                     while (System.nanoTime() < deadline) {
+                        val t0 = System.nanoTime()
                         e += runCatching { op(i) }.getOrDefault(0)
+                        lat?.record(System.nanoTime() - t0)
                         q++
                         i += concurrency
                     }
@@ -137,23 +159,6 @@ object ThroughputBench {
         bean ?: return 0
         val ids = ManagementFactory.getThreadMXBean().allThreadIds
         return bean.getThreadAllocatedBytes(ids).sumOf { it.coerceAtLeast(0) }
-    }
-
-    private class Workload(
-        private val authors: List<String>,
-        private val ids: List<String>,
-    ) {
-        fun author(i: Int) = authors[Math.floorMod(i, authors.size)]
-
-        fun id(i: Int) = ids[Math.floorMod(i, ids.size)]
-
-        companion object {
-            fun from(corpus: List<Event>) =
-                Workload(
-                    corpus.map { it.pubKey }.distinct().shuffled(kotlin.random.Random(1)).take(1000).ifEmpty { listOf("a".repeat(64)) },
-                    corpus.map { it.id }.shuffled(kotlin.random.Random(2)).take(1000).ifEmpty { listOf("0".repeat(64)) },
-                )
-        }
     }
 
     private fun num(v: Double) = if (v >= 1000) String.format("%,d", v.toLong()) else String.format("%.1f", v)

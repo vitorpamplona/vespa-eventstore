@@ -75,12 +75,30 @@ import java.util.concurrent.Executors
  * caveat Vespa itself carries.
  */
 class VespaEventIndex(
-    private val baseUrl: String = System.getenv("VESPA_URL") ?: "http://localhost:8080",
+    baseUrl: String = System.getenv("VESPA_URL") ?: "http://localhost:8080",
     private val maxHits: Int = 10_000,
+    /**
+     * All container endpoints of the cluster; empty = just [baseUrl]. On a
+     * multi-container deployment, naming every endpoint here beats a load
+     * balancer for the WRITE path: the feed client natively spreads its HTTP/2
+     * connections across all of them (connections-per-endpoint applies to
+     * each). Reads round-robin per request. A single URL pointing at a load
+     * balancer also works — this is the more direct option, not the only one.
+     */
+    endpoints: List<String> = emptyList(),
 ) : EventIndex {
+    private val urls: List<String> = endpoints.ifEmpty { listOf(baseUrl) }.map { it.trimEnd('/') }
+
+    private val nextUrl =
+        java.util.concurrent.atomic
+            .AtomicInteger()
+
+    /** The endpoint for one HTTP read — round-robin across [urls]. */
+    private fun endpoint(): String = urls[Math.floorMod(nextUrl.getAndIncrement(), urls.size)]
+
     private val feed: FeedClient =
         FeedClientBuilder
-            .create(URI.create(baseUrl))
+            .create(urls.map { URI.create(it) })
             // The throttle FLOOR is what pins bulk ingest, and it is hard-wired to
             // minInflight = 2 x connectionsPerEndpoint. Under our bursty batched
             // writes (putAll bursts, then a gap while the next chunk dedups) the
@@ -96,8 +114,13 @@ class VespaEventIndex(
             // (Jetty reserves 16). 32 keeps headroom. (The old reflective
             // setInitialInflightFactor knob was dead: the 8.7 throttler ignores it —
             // the initial target is already maxInflight.)
-            .setConnectionsPerEndpoint(32)
-            .setMaxStreamPerConnection(128)
+            // Overridable for deployment tuning (and the benchmark's feed-window
+            // grid): VESPA_FEED_CONNECTIONS / VESPA_FEED_STREAMS /
+            // VESPA_FEED_INFLIGHT_FACTOR. Defaults are the measured sweet spot
+            // for a small-core single-node host.
+            .setConnectionsPerEndpoint(System.getenv("VESPA_FEED_CONNECTIONS")?.toIntOrNull() ?: 32)
+            .setMaxStreamPerConnection(System.getenv("VESPA_FEED_STREAMS")?.toIntOrNull() ?: 128)
+            .apply { System.getenv("VESPA_FEED_INFLIGHT_FACTOR")?.toIntOrNull()?.let { setInitialInflightFactor(it) } }
             .setRetryStrategy(
                 object : FeedClient.RetryStrategy {
                     // Bounded: a dead Vespa should surface as failed ops, not a hang.
@@ -115,7 +138,7 @@ class VespaEventIndex(
             .build()
 
     override suspend fun get(id: String): EventDoc? {
-        val resp = send("$baseUrl/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
+        val resp = send("${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
         if (resp.statusCode() == 404) return null
         require(resp.statusCode() < 400) { "vespa get ${resp.statusCode()}: ${resp.body().take(300)}" }
         return DECODER.decodeFromString<DocEnvelope>(resp.body()).fields?.toDoc()
@@ -161,7 +184,8 @@ class VespaEventIndex(
         // response is decoded into flat DTOs, allocating the target objects
         // directly instead of a JsonObject/JsonArray/JsonPrimitive wrapper per
         // field. This is the query hot path, so that saved garbage matters.
-        return DECODER.decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
+        return DECODER
+            .decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
             .root.children
             .mapNotNull { it.fields?.toDoc() }
     }
@@ -182,15 +206,21 @@ class VespaEventIndex(
 
     /** Resolve [EventQuery.ids] through parallel document-API gets, then filter expiry, order, and cap like the search path. */
     private suspend fun getByIds(query: EventQuery): List<EventDoc> {
-        val hexes = query.ids.map { it.lowercase() }.filter(Hex::isHex64).distinct()
+        val hexes =
+            query.ids
+                .map { it.lowercase() }
+                .filter(Hex::isHex64)
+                .distinct()
         val docs =
             when {
                 hexes.isEmpty() -> return emptyList()
+
                 // The overwhelmingly common REQ-by-id is a SINGLE id: skip the
                 // fan-out machinery (coroutineScope + Semaphore + async/awaitAll
                 // allocate per call) and just get it. At thousands of id lookups a
                 // second that saved garbage is the difference the GC feels.
                 hexes.size == 1 -> listOfNotNull(get(hexes[0]))
+
                 else -> hexes.mapBounded(ID_GET_FANOUT) { get(it) }.filterNotNull()
             }
         // NIP-40: never serve an event already expired at the query's cutoff — the
@@ -216,7 +246,7 @@ class VespaEventIndex(
         // prefixes the list ONCE, not each field (else: ILLEGAL_PARAMETERS).
         val fieldSet = "$DOCTYPE:created_at" + if (withDTag) ",tag_index" else ""
         val base =
-            "$baseUrl/document/v1/$NAMESPACE/$DOCTYPE/docid" +
+            "${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid" +
                 "?selection=${URLEncoder.encode(selection, "UTF-8")}" +
                 "&wantedDocumentCount=$VISIT_PAGE&fieldSet=${URLEncoder.encode(fieldSet, "UTF-8")}"
         var continuation: String? = null
@@ -355,7 +385,7 @@ class VespaEventIndex(
             }.toString()
         val req =
             HttpRequest
-                .newBuilder(URI.create("$baseUrl/search/"))
+                .newBuilder(URI.create("${endpoint()}/search/"))
                 .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))

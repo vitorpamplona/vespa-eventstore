@@ -1,0 +1,133 @@
+<meta charset="utf-8">
+<title>Two-phase NIP-50 ranking — how it works</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:#fcfcfb; --text-primary:#0b0b0b; --text-secondary:#52514e;
+    --grid:#e4e3df; --panel:#f3f2ee;
+    --phase1:#2a78d6; --phase1-soft:#cde2fb;
+    --phase2:#eb6834; --phase2-soft:#fadfd2;
+    --dropped:#9b9a94;
+    font:14px/1.5 system-ui,sans-serif; background:var(--surface-1); color:var(--text-primary);
+    max-width:1060px; margin:0 auto; padding:26px;
+  }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .viz-root{
+    color-scheme:dark; --surface-1:#1a1a19; --text-primary:#fff; --text-secondary:#c3c2b7;
+    --grid:#33322f; --panel:#232322; --phase1:#3987e5; --phase1-soft:#184f95;
+    --phase2:#d95926; --phase2-soft:#6b2a10; --dropped:#7a7973; }}
+  :root[data-theme="dark"] .viz-root{
+    color-scheme:dark; --surface-1:#1a1a19; --text-primary:#fff; --text-secondary:#c3c2b7;
+    --grid:#33322f; --panel:#232322; --phase1:#3987e5; --phase1-soft:#184f95;
+    --phase2:#d95926; --phase2-soft:#6b2a10; --dropped:#7a7973; }
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--text-secondary);font-size:13px;margin:0 0 18px}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .cost{margin-top:22px}
+  .cost h2{font-size:14px;margin:0 0 8px}
+  .bar{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12.5px}
+  .bar .lbl{width:190px;color:var(--text-secondary);text-align:right;flex-shrink:0}
+  .bar .track{flex:1;display:flex;gap:2px;height:18px}
+  .seg{border-radius:4px}
+  .note{color:var(--text-secondary);font-size:12.5px;margin-top:14px;line-height:1.55}
+</style>
+<div class="viz-root">
+  <h1>Two-phase NIP-50 ranking — decompose the tuned profile, don't replace it</h1>
+  <p class="sub">Numbers from the 400k-corpus measurements: a common term matches ~50,000 docs; the relay serves the top 50.</p>
+
+  <svg viewBox="0 0 1020 470" font-size="12.5">
+    <!-- ============ STAGE 0: match set + gates ============ -->
+    <rect x="8" y="38" width="182" height="330" rx="10" fill="var(--panel)"/>
+    <text x="99" y="26" text-anchor="middle" font-weight="600" fill="var(--text-primary)">match set</text>
+    <text x="99" y="62" text-anchor="middle" fill="var(--text-primary)" font-weight="600">~50,000 hits</text>
+    <text x="99" y="79" text-anchor="middle" fill="var(--text-secondary)">weakAnd + trigram recall</text>
+    <!-- gate -->
+    <rect x="26" y="96" width="146" height="64" rx="7" fill="none" stroke="var(--dropped)" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="99" y="114" text-anchor="middle" fill="var(--text-primary)" font-weight="600">phase-1 gates</text>
+    <text x="99" y="130" text-anchor="middle" fill="var(--text-secondary)">min_rank sentinel</text>
+    <text x="99" y="145" text-anchor="middle" fill="var(--text-secondary)">rank-score-drop-limit</text>
+    <text x="99" y="185" text-anchor="middle" fill="var(--dropped)">spam / below-floor hits</text>
+    <text x="99" y="200" text-anchor="middle" fill="var(--dropped)">DROPPED HERE — never</text>
+    <text x="99" y="215" text-anchor="middle" fill="var(--dropped)">reach either phase's list</text>
+    <text x="99" y="250" text-anchor="middle" fill="var(--text-secondary)">(side-effect guard: gates</text>
+    <text x="99" y="265" text-anchor="middle" fill="var(--text-secondary)">must STAY in phase 1, else</text>
+    <text x="99" y="280" text-anchor="middle" fill="var(--text-secondary)">unreranked hits leak past</text>
+    <text x="99" y="295" text-anchor="middle" fill="var(--text-secondary)">the spam floor)</text>
+
+    <path d="M196 200 L232 200" stroke="var(--text-secondary)" stroke-width="1.6" marker-end="url(#arr)"/>
+
+    <!-- ============ STAGE 1 ============ -->
+    <rect x="238" y="38" width="300" height="392" rx="10" fill="var(--panel)"/>
+    <text x="388" y="26" text-anchor="middle" font-weight="600" fill="var(--phase1)">PHASE 1 — cheap, scores ALL 50,000</text>
+    <rect x="256" y="52" width="264" height="58" rx="7" fill="var(--phase1-soft)"/>
+    <text x="388" y="74" text-anchor="middle" fill="var(--text-primary)" font-weight="600">relevance() minus the tie-breakers</text>
+    <text x="388" y="92" text-anchor="middle" fill="var(--text-primary)">band terms (×1100) + bm25 sums</text>
+
+    <!-- band column (sorted by phase-1 score, top down) -->
+    <!-- token band -->
+    <rect x="256" y="146" width="200" height="108" rx="6" fill="var(--phase1)" opacity="0.85"/>
+    <text x="356" y="168" text-anchor="middle" fill="#fff" font-weight="600">token-match band</text>
+    <text x="356" y="184" text-anchor="middle" fill="#fff">score ≥ 1100</text>
+    <!-- gram band -->
+    <rect x="256" y="262" width="200" height="128" rx="6" fill="var(--dropped)" opacity="0.45"/>
+    <text x="356" y="286" text-anchor="middle" fill="var(--text-primary)" font-weight="600">gram-only band</text>
+    <text x="356" y="302" text-anchor="middle" fill="var(--text-secondary)">typo-recall safety net</text>
+    <!-- rerank window bracket -->
+    <path d="M246 146 L240 146 L240 232 L246 232" stroke="var(--phase2)" stroke-width="2.5" fill="none"/>
+    <text x="262" y="141" fill="var(--phase2)" font-weight="600">rerank window: top 1,000</text>
+
+    <!-- seam -->
+    <line x1="256" y1="236" x2="456" y2="236" stroke="var(--phase2)" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="356" y="406" text-anchor="middle" fill="var(--text-secondary)">band gap (1100) ≫ tie-breakers (≤ ~280): bands never flip.</text>
+    <text x="356" y="421" text-anchor="middle" fill="var(--text-secondary)">Below the dashed seam phase-1 scores stand —</text>
+    <text x="356" y="436" text-anchor="middle" fill="var(--text-secondary)">two score scales in one list (pagination caveat).</text>
+
+    <path d="M544 190 L580 190" stroke="var(--text-secondary)" stroke-width="1.6" marker-end="url(#arr)"/>
+
+    <!-- ============ STAGE 2 ============ -->
+    <rect x="586" y="38" width="300" height="392" rx="10" fill="var(--panel)"/>
+    <text x="736" y="26" text-anchor="middle" font-weight="600" fill="var(--phase2)">PHASE 2 — expensive, reranks 1,000</text>
+    <rect x="604" y="52" width="264" height="72" rx="7" fill="var(--phase2-soft)"/>
+    <text x="736" y="74" text-anchor="middle" fill="var(--text-primary)" font-weight="600">the FULL tuned relevance()</text>
+    <text x="736" y="92" text-anchor="middle" fill="var(--text-primary)">+ fieldMatch proximity</text>
+    <text x="736" y="108" text-anchor="middle" fill="var(--text-primary)">+ match-quality ladder</text>
+
+    <rect x="604" y="146" width="200" height="86" rx="6" fill="var(--phase2)" opacity="0.9"/>
+    <text x="704" y="172" text-anchor="middle" fill="#fff" font-weight="600">window reordered by the</text>
+    <text x="704" y="188" text-anchor="middle" fill="#fff" font-weight="600">exact same math as today</text>
+    <text x="704" y="212" text-anchor="middle" fill="#fff">within-band order restored</text>
+
+    <path d="M704 240 L704 268" stroke="var(--text-secondary)" stroke-width="1.6" marker-end="url(#arr)"/>
+    <rect x="628" y="276" width="152" height="40" rx="7" fill="none" stroke="var(--text-primary)" stroke-width="1.6"/>
+    <text x="704" y="301" text-anchor="middle" font-weight="600" fill="var(--text-primary)">served top 50</text>
+    <text x="704" y="336" text-anchor="middle" fill="var(--text-secondary)">identical to today iff its docs sit inside</text>
+    <text x="704" y="351" text-anchor="middle" fill="var(--text-secondary)">the window — the quality gate's job</text>
+
+    <text x="736" y="380" text-anchor="middle" fill="var(--text-secondary)">multi-node caveat: the window is PER NODE,</text>
+    <text x="736" y="395" text-anchor="middle" fill="var(--text-secondary)">so topology changes the effective window</text>
+
+    <defs><marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L8,4.5 L0,9 z" fill="var(--text-secondary)"/></marker></defs>
+  </svg>
+
+  <div class="cost">
+    <h2>Why it's faster — where the ranking work goes</h2>
+    <div class="bar"><span class="lbl">today (single phase)</span>
+      <span class="track"><span class="seg" style="flex:100;background:var(--phase2)" title="full relevance × 50,000"></span></span>
+    </div>
+    <div class="bar"><span class="lbl">two-phase</span>
+      <span class="track"><span class="seg" style="flex:18;background:var(--phase1)" title="cheap phase 1 × 50,000"></span>
+      <span class="seg" style="flex:2;background:var(--phase2)" title="full relevance × 1,000"></span>
+      <span class="seg" style="flex:80;background:transparent"></span></span>
+    </div>
+    <div class="bar"><span class="lbl"></span><span style="font-size:12px;color:var(--text-secondary)">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--phase2);margin-right:5px"></span>full relevance() per hit
+      <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--phase1);margin:0 5px 0 16px"></span>cheap band+bm25 per hit</span>
+    </div>
+  </div>
+
+  <p class="note"><b>Reading the risks off the picture:</b> the gates live in the left box (moving them right leaks spam past the floor);
+  the dashed seam is the score discontinuity (pagination); the orange bracket is per-node (topology-dependent order);
+  and a query whose matches all sit in the gram band — a typo query — fills the window with the coarsest scores, which is why the
+  quality gate's query set includes short/typo terms. When the match set is smaller than the window, both phases score everything:
+  pure overhead, so the ship criterion protects the median (rare-term) query, not just the heavy one.</p>
+</div>

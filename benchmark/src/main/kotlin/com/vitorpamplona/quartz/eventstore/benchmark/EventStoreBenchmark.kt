@@ -58,6 +58,26 @@ object EventStoreBenchmark {
         val size = env("BENCH_SIZE", 30_000)
         val batch = env("BENCH_BATCH", 500)
         val queries = env("BENCH_QUERIES", 2_000)
+        try {
+            run(size, batch, queries)
+        } finally {
+            // Machine-readable results (BENCH_JSON=path): the regression baseline.
+            BenchResults.writeIfRequested(
+                mapOf(
+                    "size" to size.toString(),
+                    "batch" to batch.toString(),
+                    "queries" to queries.toString(),
+                    "seed" to (System.getenv("BENCH_SEED") ?: "42"),
+                ),
+            )
+        }
+    }
+
+    private fun run(
+        size: Int,
+        batch: Int,
+        queries: Int,
+    ) {
         val refSize = env("BENCH_REF_SIZE", 8_000).coerceAtMost(size)
         val seed = System.getenv("BENCH_SEED")?.toLongOrNull() ?: 42L
         val vespaUrl = System.getenv("BENCH_VESPA_URL")
@@ -66,13 +86,88 @@ object EventStoreBenchmark {
         // sections each time (they don't change). Corpus + real Vespa only.
         val vespaOnly = System.getenv("BENCH_VESPA_ONLY") != null
 
+        // Focused insert probe: fresh + duplicate per-event inserts against a live
+        // Vespa, nothing else. For controlled A/Bs of the insert path (run two
+        // code versions back to back against the SAME loaded corpus, giving each
+        // its own BENCH_ID_BAND so "fresh" stays fresh).
+        if (System.getenv("BENCH_INSERT_PROBE") != null) {
+            requireNotNull(vespaUrl) { "BENCH_INSERT_PROBE needs BENCH_VESPA_URL" }
+            InsertProbe.run(
+                url = vespaUrl,
+                band = System.getenv("BENCH_ID_BAND")?.toLongOrNull(16) ?: 0x6L,
+                size = env("BENCH_PROBE_SIZE", 2_000),
+                seed = seed,
+            )
+            return
+        }
+
+        // Ingest stage profile: run a bulk ingest against a live Vespa and print
+        // the store's own per-stage wall-time split (dedup/guards/versions/write/
+        // proj.*) plus the feed-client gauge — where each batchInsert millisecond
+        // goes, before optimizing any of it.
+        if (System.getenv("BENCH_INGEST_PROFILE") != null) {
+            requireNotNull(vespaUrl) { "BENCH_INGEST_PROFILE needs BENCH_VESPA_URL" }
+            val n = env("BENCH_PROFILE_SIZE", 20_000)
+            val band = System.getenv("BENCH_ID_BAND")?.toLongOrNull(16) ?: 0xE0L
+            val events = NostrCorpus.generate(NostrCorpus.Config(size = n, seed = seed + 31, idBand = band))
+            com.vitorpamplona.quartz.eventstore.store.VespaEventStore.open(vespaUrl).use { store ->
+                com.vitorpamplona.quartz.eventstore.vespa.IngestStats
+                    .gauge() // reset the deltas
+                val nanos =
+                    kotlin.system.measureNanoTime {
+                        runBlocking { events.chunked(batch).forEach { store.batchInsert(it) } }
+                    }
+                val secs = nanos / 1e9
+                println(String.format("ingested %d events (batch %d) in %.1fs = %.0f events/sec", n, batch, secs, n / secs))
+                println(
+                    com.vitorpamplona.quartz.eventstore.vespa.IngestStats
+                        .gauge(),
+                )
+                println(store.feedGauge())
+            }
+            return
+        }
+
+        // Ranking-change gate: order-fidelity + cost of a candidate rank profile
+        // vs the tuned baseline, per term class (see RankQuality).
+        if (System.getenv("BENCH_RANK_QUALITY") != null) {
+            requireNotNull(vespaUrl) { "BENCH_RANK_QUALITY needs BENCH_VESPA_URL" }
+            RankQuality.run(vespaUrl)
+            return
+        }
+
+        // Throughput-vs-size curve: delta-ingest one prefix-stable corpus into
+        // both engines and measure at each checkpoint (see ScaleCurve).
+        if (System.getenv("BENCH_SCALE_CURVE") != null) {
+            ScaleCurve.run(vespaUrl, seed)
+            return
+        }
+
+        // Bulk-ingest sweep: chunk size x parallel streams against a live Vespa
+        // (see IngestSweep) — which knob raises the throttle-floor-bound ingest.
+        if (System.getenv("BENCH_INGEST_SWEEP") != null) {
+            requireNotNull(vespaUrl) { "BENCH_INGEST_SWEEP needs BENCH_VESPA_URL" }
+            IngestSweep.run(vespaUrl, seed)
+            return
+        }
+
+        // Mixed read/write load against a live Vespa: read-only and write-only
+        // baselines, then both at once (see MixedLoadBench). The main corpus is
+        // generated only to SAMPLE the read workload — the store is assumed
+        // already loaded with it (run the full benchmark first, or ingest).
+        if (System.getenv("BENCH_MIXED") != null) {
+            requireNotNull(vespaUrl) { "BENCH_MIXED needs BENCH_VESPA_URL" }
+            MixedLoadBench.run(vespaUrl, NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed)), seed)
+            return
+        }
+
         println("Generating corpus: size=$size authors≈${size / 20} seed=$seed ...")
         val corpus = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed))
         val refCorpus = corpus.take(refSize)
         printMix(corpus)
 
         // Query workload parameters sampled from the corpus (stable across backends).
-        val workload = Workload.from(corpus)
+        val workload = BenchWorkload.from(corpus)
 
         if (!vespaOnly) {
             println("\n" + "=".repeat(72))
@@ -101,7 +196,7 @@ object EventStoreBenchmark {
             println("QUERY THROUGHPUT  (store pre-loaded with the full corpus)")
             println("=".repeat(72))
             runQuerySuite("SQLite (memory)", corpus, workload, queries) { Backends.sqliteMemory() }
-            runQuerySuite("Vespa/InMemory ref* (n=$refSize)", refCorpus, Workload.from(refCorpus), queries / 4) { Backends.vespaInMemory() }
+            runQuerySuite("Vespa/InMemory ref* (n=$refSize)", refCorpus, BenchWorkload.from(refCorpus), queries / 4) { Backends.vespaInMemory() }
 
             println("\n* Vespa/InMemory ref is the store over an O(n)-scan in-memory engine: a")
             println("  correctness reference, NOT a throughput proxy for real Vespa. Read its")
@@ -153,15 +248,24 @@ object EventStoreBenchmark {
         val n = corpus.size.toDouble()
         println("corpus for this section: ${corpus.size} events\n")
         println(String.format("%-14s %12s %12s %12s %12s %12s", "path", "reads", "writes", "total", "rt/event", "reads/event"))
+
         fun row(
             name: String,
             c: CountingEventIndex,
-        ) = println(
-            String.format(
-                "%-14s %12d %12d %12d %12.2f %12.2f",
-                name, c.reads(), c.writeCalls(), c.total(), c.total() / n, c.reads() / n,
-            ),
-        )
+        ) {
+            println(
+                String.format(
+                    "%-14s %12d %12d %12d %12.2f %12.2f",
+                    name,
+                    c.reads(),
+                    c.writeCalls(),
+                    c.total(),
+                    c.total() / n,
+                    c.reads() / n,
+                ),
+            )
+            BenchResults.record("round-trips $name", "rt_per_event" to c.total() / n, "reads_per_event" to c.reads() / n)
+        }
         row("insert()", perEventCounter)
         row("batchInsert()", bulkCounter)
         val ratio = perEventCounter.total().toDouble() / bulkCounter.total().coerceAtLeast(1)
@@ -177,15 +281,24 @@ object EventStoreBenchmark {
         batch: Int,
         factory: () -> IEventStore,
     ) = runBlocking {
-        // Per-event insert().
+        // Per-event insert() measured AT CORPUS SCALE: preload everything but a
+        // probe tail via the bulk path, then time per-event inserts on top —
+        // the same shape as the real-Vespa probe. Per-event-inserting the FULL
+        // corpus would measure the same thing and take hours at 1M (SQLite's
+        // admission SELECTs degrade as the table grows — which this probe
+        // captures, at the corpus's real size, in minutes). At corpus sizes up
+        // to the probe cap the preload is empty and semantics are unchanged.
+        val probe = corpus.takeLast(PER_EVENT_PROBE.coerceAtMost(corpus.size))
+        val preload = corpus.dropLast(probe.size)
         val single = factory()
+        runBlocking { preload.chunked(1_000).forEach { single.batchInsert(it) } }
         val singleNanos =
             measureNanoTime {
-                runBlocking { for (e in corpus) runCatching { single.insert(e) } }
+                runBlocking { for (e in probe) runCatching { single.insert(e) } }
             }
         single.close()
 
-        // Bulk batchInsert().
+        // Bulk batchInsert() over the FULL corpus.
         val bulk = factory()
         val bulkNanos =
             measureNanoTime {
@@ -193,22 +306,27 @@ object EventStoreBenchmark {
             }
         bulk.close()
 
-        Table.row("$name  insert()", corpus.size, singleNanos)
+        val probeLabel = if (preload.isEmpty()) "insert()" else "insert() @${preload.size / 1_000}k preloaded"
+        Table.row("$name  $probeLabel", probe.size, singleNanos)
         Table.row("$name  batchInsert($batch)", corpus.size, bulkNanos)
     }
+
+    /** Per-event insert probe size — enough samples for a stable rate at any corpus size. */
+    private const val PER_EVENT_PROBE = 30_000
 
     // ---- query throughput --------------------------------------------------
 
     private fun runQuerySuite(
         name: String,
         corpus: List<Event>,
-        workload: Workload,
+        workload: BenchWorkload,
         reps: Int,
         factory: () -> IEventStore,
     ) = runBlocking {
         val store = factory()
         corpus.chunked(1_000).forEach { store.batchInsert(it) }
         println("\n-- $name (loaded ${corpus.size} events) --")
+        BenchResults.section(name)
         Table.queryHeader()
 
         query("author-timeline", reps) { i -> store.query<Event>(Filter(authors = listOf(workload.author(i)), limit = 50)) }
@@ -218,6 +336,17 @@ object EventStoreBenchmark {
         query("profile(kind0)", reps) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(workload.author(i)), limit = 1)) }
         query("count(reactions)", reps) { store.count(Filter(kinds = listOf(7))) }
         query("nip50-search", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), search = workload.term(i), limit = 50)) }
+
+        // LIST-shaped REQs — what clients actually subscribe with: a follow-feed
+        // (the observer's whole contact list as authors), an id-set fetch (a
+        // thread), a wide #p list (notifications for everyone you follow), and a
+        // contact-sync (profiles+contacts+relay lists for a list of authors).
+        // Fewer reps: each does hundreds of times the work of a point lookup.
+        val listReps = (reps / 4).coerceAtLeast(25)
+        query("follow-feed(a300)", listReps) { i -> store.query<Event>(Filter(authors = workload.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500)) }
+        query("ids-set(100)", listReps) { i -> store.query<Event>(Filter(ids = workload.idList(i, 100))) }
+        query("tag-list(p100)", listReps) { i -> store.query<Event>(Filter(kinds = listOf(1, 7), tags = mapOf("p" to workload.pList(i, 100)), limit = 300)) }
+        query("contact-sync(a100)", listReps) { i -> store.query<Event>(Filter(authors = workload.authorList(i, 100), kinds = listOf(0, 3, 10002), limit = 300)) }
 
         store.close()
     }
@@ -230,41 +359,20 @@ object EventStoreBenchmark {
         val warm = (reps / 10).coerceIn(1, 100)
         repeat(warm) { runCatching { op(it) } }
         var checksum = 0L
+        val lat = Latencies()
         val nanos =
             measureNanoTime {
                 runBlocking {
                     repeat(reps) { i ->
-                        val r = runCatching { op(i) }.getOrNull()
+                        val r = lat.timed { runCatching { op(i) }.getOrNull() }
                         if (r is Collection<*>) checksum += r.size
                     }
                 }
             }
-        Table.queryRow(name, reps, nanos, checksum)
+        Table.queryRow(name, reps, nanos, checksum, lat)
     }
 
     // ---- helpers -----------------------------------------------------------
-
-    /** Sampled, stable query parameters drawn from the corpus. */
-    private class Workload(
-        private val authors: List<String>,
-        private val ids: List<String>,
-        private val terms: List<String>,
-    ) {
-        fun author(i: Int) = authors[i % authors.size]
-
-        fun id(i: Int) = ids[i % ids.size]
-
-        fun term(i: Int) = terms[i % terms.size]
-
-        companion object {
-            fun from(corpus: List<Event>): Workload {
-                val authors = corpus.map { it.pubKey }.distinct().shuffled(kotlin.random.Random(1)).take(500)
-                val ids = corpus.map { it.id }.shuffled(kotlin.random.Random(2)).take(500)
-                val terms = "nostr bitcoin coffee freedom relay privacy vespa trust".split(" ")
-                return Workload(authors.ifEmpty { listOf("a".repeat(64)) }, ids.ifEmpty { listOf("0".repeat(64)) }, terms)
-            }
-        }
-    }
 
     private fun printMix(corpus: List<Event>) {
         val byKind = corpus.groupingBy { it.kind }.eachCount().toSortedMap()
@@ -284,18 +392,21 @@ object EventStoreBenchmark {
             val perSec = events / secs
             val microsEach = nanos / 1000.0 / events
             println(String.format("%-42s %12d %14s %12.2f", name, events, fmt(perSec), microsEach))
+            BenchResults.record(name, "events_per_sec" to perSec)
         }
 
-        fun queryHeader() = println(String.format("%-20s %10s %14s %12s %10s", "query", "reps", "queries/sec", "µs/query", "Σresults"))
+        fun queryHeader() = println(String.format("%-20s %10s %14s %12s %10s  %s", "query", "reps", "queries/sec", "µs/query", "Σresults", "latency tail"))
 
         fun queryRow(
             name: String,
             reps: Int,
             nanos: Long,
             checksum: Long,
+            lat: Latencies,
         ) {
             val secs = nanos / 1e9
-            println(String.format("%-20s %10d %14s %12.2f %10d", name, reps, fmt(reps / secs), nanos / 1000.0 / reps, checksum))
+            println(String.format("%-20s %10d %14s %12.2f %10d  %s", name, reps, fmt(reps / secs), nanos / 1000.0 / reps, checksum, lat.summary()))
+            BenchResults.record(name, lat, "qps" to reps / secs, "sum_results" to checksum.toDouble())
         }
 
         private fun fmt(v: Double) = if (v >= 1000) String.format("%,d", v.toLong()) else String.format("%.1f", v)

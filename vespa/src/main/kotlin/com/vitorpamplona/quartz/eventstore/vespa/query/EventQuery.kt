@@ -73,6 +73,14 @@ data class EventQuery(
      * default that `include:spam` switches off.
      */
     val minRank: Double? = null,
+    /**
+     * Overrides a two-phase rank profile's rerank window for this query
+     * (`ranking.rerankCount`, PER CONTENT NODE). Null = the profile's own
+     * setting; meaningless (and ignored by the engine) on single-phase
+     * profiles. Exists for the ranking A/B harness — production queries
+     * should trust the profile.
+     */
+    val rerankCount: Int? = null,
 )
 
 /** A ready-to-send Vespa query: the YQL, its query parameters, and the rank profile. */

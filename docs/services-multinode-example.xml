@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- ANNOTATED multi-node services.xml example (see docs/scaling.md).
+
+     This file is documentation, not deployed. Start from the bundled
+     package's services.xml, then apply your topology as shown here.
+
+     KEEP verbatim from the bundled package:
+       * the GC selection on the event document (NIP-40 expiry, engine-side)
+       * schemas/ and search/query-profiles/ (taken from the library jar)
+     CHANGE for your deployment:
+       * node lists (hostaliases come from your hosts.xml / infrastructure)
+       * redundancy / searchable-copies
+       * resource limits (the bundled dev override is REMOVED here: size disks
+         instead, and let Vespa's default 80%/85% feed-block guard protect you)
+       * numthreadspersearch (1 = concurrent-serving throughput; raise for a
+         latency-critical few-big-queries deployment)                          -->
+<services version="1.0">
+
+  <!-- Config servers are declared in your deployment tooling (3 for HA). -->
+
+  <container id="default" version="1.0">
+    <search />
+    <document-api />
+    <nodes>
+      <!-- Two+ stateless containers: pass ALL of them to
+           VespaEventStore.open(endpoints = [...]) so the feed client spreads
+           connections across them and reads round-robin. -->
+      <node hostalias="container-0" />
+      <node hostalias="container-1" />
+    </nodes>
+  </container>
+
+  <content id="content" version="1.0">
+    <!-- Two copies of every event: one node can fail without data loss.
+         searchable-copies=1 keeps only the active copy indexed (half the
+         memory); a failover then reindexes before serving that data. -->
+    <redundancy>2</redundancy>
+    <engine>
+      <proton>
+        <searchable-copies>1</searchable-copies>
+      </proton>
+    </engine>
+
+    <documents garbage-collection="true">
+      <!-- KEEP: NIP-40 expiry as a server-side constraint (docs/server-side-constraints.md). -->
+      <document type="event" mode="index" selection="event.expires_at &gt; now()" />
+      <!-- KEEP: global so event docs can import the trust tensors (parent/child). -->
+      <document type="reputation" mode="index" global="true" />
+    </documents>
+
+    <nodes>
+      <!-- The corpus splits ~evenly across these; add nodes and redeploy to
+           grow — Vespa redistributes online. For query-throughput scaling,
+           see grouped distribution (<group> elements) in the Vespa docs. -->
+      <node distribution-key="0" hostalias="content-0" />
+      <node distribution-key="1" hostalias="content-1" />
+      <node distribution-key="2" hostalias="content-2" />
+      <node distribution-key="3" hostalias="content-3" />
+    </nodes>
+
+    <config name="vespa.config.search.core.proton">
+      <feeding>
+        <concurrency>1.0</concurrency>
+      </feeding>
+      <!-- KEEP for relay serving: one matching thread per query keeps cores
+           saturated with independent queries (throughput-optimal). -->
+      <numthreadspersearch>1</numthreadspersearch>
+      <!-- KEEP: cap the transaction log so it flushes/prunes long before it
+           can fill a disk mid-sync (see the bundled services.xml comment). -->
+      <flush>
+        <memory>
+          <maxtlssize>4294967296</maxtlssize>
+        </memory>
+      </flush>
+    </config>
+  </content>
+
+</services>

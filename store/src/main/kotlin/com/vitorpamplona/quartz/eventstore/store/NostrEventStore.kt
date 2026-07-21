@@ -92,10 +92,14 @@ class NostrEventStore(
 ) : IEventStore {
     private val writes = Mutex()
 
+    // Owners with any stored tombstone/vanish; everyone else's inserts skip the
+    // NIP-09/62 guard probes entirely (see GuardOwners for the safety argument).
+    private val guards = GuardOwners(index)
+
     // The bulk fast path shares this store's exact deletion/vanish probes for
     // its guard-page fallback (the rare owner whose guard set overflows a page).
     private val bulkInsert =
-        BulkInsert(index, relay) { e ->
+        BulkInsert(index, relay, guards) { e ->
             rejectIfDeleted(e)
             rejectIfVanished(e)
         }
@@ -172,6 +176,7 @@ class NostrEventStore(
         val added = after.filter { it.id !in before }
         if (removed.isNotEmpty()) index.removeAll(removed)
         if (added.isNotEmpty()) index.putAll(added)
+        added.forEach { if (it.kind == DeletionEvent.KIND || it.kind == RequestToVanishEvent.KIND) guards.noteGuardStored(it.pubkey) }
         return outcomes
     }
 
@@ -273,13 +278,25 @@ class NostrEventStore(
         // trip's latency for the guards, not three in series. The results are then
         // checked in the original precedence (duplicate > deleted > vanished), so
         // which rejection wins is unchanged.
+        //
+        // The dup GET deliberately stays a read. Folding it into the write as a
+        // conditional put (create-if-nonexistent + always-false test-and-set) was
+        // built and A/B-measured against a live engine: it cut engine reads 3.25
+        // to 2.25/event but was 15-20% SLOWER on fresh inserts (Vespa's
+        // conditional writes pay a read-for-write check) and ~35% slower on
+        // duplicates, which lose this wave's 1-round-trip early exit and pay a
+        // full write attempt instead. See docs/server-side-constraints.md.
         coroutineScope {
             val existing = async { index.get(event.id) }
-            val deleted = async { isDeleted(event) }
-            val vanished = async { isVanished(event) }
+            // Guard probes run only when this owner HAS a stored tombstone or
+            // vanish (GuardOwners) — for everyone else both probes provably
+            // come back empty, so the common-case insert reads just the dup get.
+            val probeGuards = guards.mightHaveGuards(event.owner())
+            val deleted = if (probeGuards) async { isDeleted(event) } else null
+            val vanished = if (probeGuards) async { isVanished(event) } else null
             if (existing.await() != null) throw RejectedException(Rejections.DUPLICATE)
-            if (deleted.await()) throw RejectedException(Rejections.DELETED)
-            if (vanished.await()) throw RejectedException(Rejections.VANISHED)
+            if (deleted?.await() == true) throw RejectedException(Rejections.DELETED)
+            if (vanished?.await() == true) throw RejectedException(Rejections.VANISHED)
         }
         when (event) {
             is DeletionEvent -> applyDeletion(event)
@@ -287,6 +304,7 @@ class NostrEventStore(
             else -> supersede(event)
         }
         index.put(event.toDoc())
+        if (event is DeletionEvent || event is RequestToVanishEvent) guards.noteGuardStored(event.pubKey)
     }
 
     // ---- queries ------------------------------------------------------------

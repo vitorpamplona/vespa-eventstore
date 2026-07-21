@@ -489,6 +489,8 @@ object MockYql {
 
                     clause.startsWith("(tag_index contains ") -> tagGroup(q, clause)
 
+                    clause.startsWith("tag_index in (") -> tagInGroup(q, clause)
+
                     else -> error("unparseable clause: $clause")
                 }
         }
@@ -517,6 +519,22 @@ object MockYql {
         require(pairs.all { it.first == name }) { "mixed tag names in one group: $clause" }
         val values = pairs.map { it.second }
         return if (all) q.copy(tagsAll = q.tagsAll + (name to values)) else q.copy(tags = q.tags + (name to values))
+    }
+
+    /** The multi-value OR form EventYql emits for NIP-01 tag lists: `tag_index in ("n:v1", "n:v2", …)` -> tags. */
+    private fun tagInGroup(
+        q: EventQuery,
+        clause: String,
+    ): EventQuery {
+        val body = clause.removePrefix("tag_index in (").removeSuffix(")")
+        val pairs =
+            splitTopLevel(body, ", ").map { literal ->
+                val value = unquote(literal.trim())
+                value.substringBefore(":") to value.substringAfter(":")
+            }
+        val name = pairs.first().first
+        require(pairs.all { it.first == name }) { "mixed tag names in one in-list: $clause" }
+        return q.copy(tags = q.tags + (name to pairs.map { it.second }))
     }
 
     /** Which joiner a group uses, looking only OUTSIDE string literals. */

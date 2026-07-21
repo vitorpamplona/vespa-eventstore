@@ -97,6 +97,8 @@ object EventYql {
             params["ranking.features.query(user_q)"] = "{$observer:1.0}"
             q.minRank?.let { params["ranking.features.query(min_rank)"] = it.toString() }
         }
+        // Two-phase profiles only; the engine ignores it elsewhere.
+        q.rerankCount?.let { params["ranking.rerankCount"] = it.toString() }
 
         val where = if (clauses.isEmpty()) "true" else clauses.joinToString(" and ")
         // No text and no rank profile = plain relay REQ semantics: newest
@@ -227,6 +229,15 @@ object EventYql {
      * One tag constraint: values joined with [op] ("or" = NIP-01 tags, "and" =
      * tagsAll). Null when it can't match: tag_index only holds single-letter
      * names, and a present-but-empty value list matches nothing.
+     *
+     * The OR case compiles to the `in` operator, not an OR-chain of `contains`:
+     * `tag_index` is a fast-search attribute, and `in` resolves the whole value
+     * list through one dictionary-backed iterator where an OR tree pays a
+     * per-term iterator plus the OR merge — the difference grows with the list,
+     * and relay tag lists run to hundreds of values (a `#p` notification REQ
+     * carries the observer's whole follow list). Semantics are identical:
+     * `in` on an array attribute matches any element, exactly like the OR of
+     * `contains`. AND (tagsAll) has no `in` form; it stays a `contains` chain.
      */
     private fun tagClause(
         name: String,
@@ -235,6 +246,9 @@ object EventYql {
     ): String? {
         if (!isSingleLetterTagName(name)) return null
         if (values.isEmpty()) return null
+        if (op == "or" && values.size > 1) {
+            return values.joinToString(", ", prefix = "tag_index in (", postfix = ")") { v -> quote("$name:$v") }
+        }
         return values.joinToString(" $op ", prefix = "(", postfix = ")") { v -> "tag_index contains ${quote("$name:$v")}" }
     }
 

@@ -48,32 +48,62 @@ class InMemoryEventIndex : EventIndex {
     }
 
     override suspend fun search(query: EventQuery): List<EventDoc> {
-        val hits = docs.values.filter { it.matches(query) }.sortedWith(NEWEST_FIRST)
+        val c = Compiled(query)
+        val hits = docs.values.filter { c.matches(it) }.sortedWith(NEWEST_FIRST)
         return query.limit?.let(hits::take) ?: hits
     }
 
-    override suspend fun count(query: EventQuery): Int = docs.values.count { it.matches(query) }
+    override suspend fun count(query: EventQuery): Int {
+        val c = Compiled(query)
+        return docs.values.count { c.matches(it) }
+    }
 
-    override suspend fun distinctAuthors(query: EventQuery): Set<String> = docs.values.filter { it.matches(query) }.mapTo(HashSet()) { it.pubkey }
+    override suspend fun distinctAuthors(query: EventQuery): Set<String> {
+        val c = Compiled(query)
+        return docs.values.filter { c.matches(it) }.mapTo(HashSet()) { it.pubkey }
+    }
 
     override fun close() {}
 
     fun size(): Int = docs.size
 
-    private fun EventDoc.matches(q: EventQuery): Boolean {
-        val pairs = tagIndex()
-        return (q.ids.isEmpty() || id in q.ids) &&
-            (q.kinds.isEmpty() || kind in q.kinds) &&
-            (q.notKinds.isEmpty() || kind !in q.notKinds) &&
-            (q.authors.isEmpty() || pubkey in q.authors) &&
-            (q.owners.isEmpty() || owner in q.owners) &&
-            q.tags.all { (name, values) -> values.any { v -> "$name:$v" in pairs } } &&
-            q.tagsAll.all { (name, values) -> values.all { v -> "$name:$v" in pairs } } &&
-            (q.since == null || createdAt >= q.since) &&
-            (q.until == null || createdAt <= q.until) &&
-            (q.expiresBefore == null || (expiresAt()?.let { it < q.expiresBefore } == true)) &&
-            (q.notExpiredAt == null || (expiresAt() ?: EventDoc.NO_EXPIRATION) > q.notExpiredAt) &&
-            (q.search.isNullOrBlank() || search.matches(q.search.trim()))
+    /**
+     * The query's list constraints, compiled to hash sets ONCE per scan. Matching
+     * runs per doc over the whole map (this is the O(n)-scan reference), so list
+     * membership must not be O(list) too: a 300-author follow-feed filter over a
+     * 30k corpus would otherwise burn ~9M string compares per query. Semantics
+     * are identical to the direct interpretation — "v in list" ⇔ "v in set".
+     */
+    private class Compiled(
+        private val q: EventQuery,
+    ) {
+        private val ids = q.ids.toHashSet()
+        private val kinds = q.kinds.toHashSet()
+        private val notKinds = q.notKinds.toHashSet()
+        private val authors = q.authors.toHashSet()
+        private val owners = q.owners.toHashSet()
+
+        /** One set of `name:value` pairs per OR-tag constraint: the doc matches if any of ITS pairs is in the set. */
+        private val tagAny: List<HashSet<String>> = q.tags.map { (name, values) -> values.mapTo(HashSet()) { "$name:$it" } }
+
+        /** tagsAll keeps AND semantics: every listed pair must be on the doc. */
+        private val tagAll: List<List<String>> = q.tagsAll.map { (name, values) -> values.map { "$name:$it" } }
+
+        fun matches(d: EventDoc): Boolean {
+            val pairs = if (tagAny.isEmpty() && tagAll.isEmpty()) emptyList() else d.tagIndex()
+            return (ids.isEmpty() || d.id in ids) &&
+                (kinds.isEmpty() || d.kind in kinds) &&
+                (notKinds.isEmpty() || d.kind !in notKinds) &&
+                (authors.isEmpty() || d.pubkey in authors) &&
+                (owners.isEmpty() || d.owner in owners) &&
+                tagAny.all { set -> pairs.any { it in set } } &&
+                tagAll.all { required -> required.all { it in pairs } } &&
+                (q.since == null || d.createdAt >= q.since) &&
+                (q.until == null || d.createdAt <= q.until) &&
+                (q.expiresBefore == null || (d.expiresAt()?.let { it < q.expiresBefore } == true)) &&
+                (q.notExpiredAt == null || (d.expiresAt() ?: EventDoc.NO_EXPIRATION) > q.notExpiredAt) &&
+                (q.search.isNullOrBlank() || d.search.matches(q.search.trim()))
+        }
     }
 
     private companion object {
