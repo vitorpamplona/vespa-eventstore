@@ -24,6 +24,7 @@ import ai.vespa.feed.client.FeedClient
 import ai.vespa.feed.client.FeedClientBuilder
 import ai.vespa.feed.client.OperationParameters
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
+import com.vitorpamplona.quartz.eventstore.vespa.doc.SearchFields
 import com.vitorpamplona.quartz.eventstore.vespa.mapBounded
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventSelection
@@ -32,6 +33,9 @@ import com.vitorpamplona.quartz.eventstore.vespa.query.VespaQuery
 import com.vitorpamplona.quartz.utils.Hex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -114,8 +118,7 @@ class VespaEventIndex(
         val resp = send("$baseUrl/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
         if (resp.statusCode() == 404) return null
         require(resp.statusCode() < 400) { "vespa get ${resp.statusCode()}: ${resp.body().take(300)}" }
-        val fields = Json.parseToJsonElement(resp.body()).jsonObject["fields"]?.jsonObject ?: return null
-        return EventDoc.fromSummary(fields)
+        return DECODER.decodeFromString<DocEnvelope>(resp.body()).fields?.toDoc()
     }
 
     private fun putOp(doc: EventDoc) =
@@ -154,11 +157,13 @@ class VespaEventIndex(
         // results are identical to the search path.
         if (query.isPureIdLookup()) return getByIds(query)
         val vq = EventYql.build(query) ?: return emptyList()
-        val root = queryRoot(vq, hits = query.limit ?: maxHits) ?: return emptyList()
-        return root["children"]
-            ?.jsonArray
-            ?.mapNotNull { child -> child.jsonObject["fields"]?.jsonObject?.let(::summaryOrNull) }
-            ?: emptyList()
+        // Stream the hits straight into docs (no full JsonElement tree): the
+        // response is decoded into flat DTOs, allocating the target objects
+        // directly instead of a JsonObject/JsonArray/JsonPrimitive wrapper per
+        // field. This is the query hot path, so that saved garbage matters.
+        return DECODER.decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
+            .root.children
+            .mapNotNull { it.fields?.toDoc() }
     }
 
     /**
@@ -332,13 +337,15 @@ class VespaEventIndex(
     }
 
     /**
-     * Run [vq] against `/search/`. It POSTs because a filter with hundreds of
-     * ids or authors builds YQL far past any sane URL length.
+     * POST [vq] to `/search/` and return the raw response body. POSTs because a
+     * filter with hundreds of ids or authors builds YQL far past any sane URL
+     * length. The recall path ([search]) streams this straight into typed docs;
+     * the grouping paths wrap it in [queryRoot] for tree walking.
      */
-    private suspend fun queryRoot(
+    private suspend fun queryBody(
         vq: VespaQuery,
         hits: Int,
-    ): JsonObject? {
+    ): String {
         val body =
             buildJsonObject {
                 put("yql", vq.yql)
@@ -358,11 +365,35 @@ class VespaEventIndex(
         // must not kill a whole multi-hour sync, so 5xx gets brief retries.
         val resp = sendRetrying(req)
         require(resp.statusCode() < 400) { "vespa search ${resp.statusCode()}: ${resp.body().take(300)}" }
-        return Json.parseToJsonElement(resp.body()).jsonObject["root"]?.jsonObject
+        return resp.body()
     }
 
-    /** Grouping/meta children have no event fields; skip anything that doesn't parse as a doc. */
-    private fun summaryOrNull(fields: JsonObject): EventDoc? = runCatching { EventDoc.fromSummary(fields) }.getOrNull()
+    /** The grouping/count paths need the full tree; [search] does not (it decodes hits directly). */
+    private suspend fun queryRoot(
+        vq: VespaQuery,
+        hits: Int,
+    ): JsonObject? = Json.parseToJsonElement(queryBody(vq, hits)).jsonObject["root"]?.jsonObject
+
+    /**
+     * Rebuild a doc from the decoded summary. `tags` is the one field still parsed
+     * per hit — the store keeps it as a JSON string. The search columns map
+     * positionally to [SearchFields] (all-null on the trimmed recall path, so it
+     * equals [SearchFields.NONE]; populated on a full get).
+     */
+    private fun VespaSummary.toDoc(): EventDoc? {
+        if (id.isEmpty()) return null
+        return EventDoc(
+            id = id,
+            pubkey = pubkey,
+            createdAt = createdAt,
+            kind = kind,
+            tags = Json.parseToJsonElement(tags).jsonArray.map { row -> row.jsonArray.map { it.jsonPrimitive.content } },
+            content = content,
+            sig = sig,
+            owner = owner ?: pubkey,
+            search = SearchFields(name, displayName, about, nip05, lud16, website, primary, secondary, text, location),
+        )
+    }
 
     private suspend fun send(url: String): HttpResponse<String> =
         sendRetrying(
@@ -411,9 +442,64 @@ class VespaEventIndex(
     /** Graceful: waits for in-flight feed operations before closing the connections. */
     override fun close() = feed.close(true)
 
+    // --- streaming decode DTOs (avoid the JsonElement tree on the recall path) ---
+
+    /** `/search/` response: only the hit children are decoded; grouping/meta are ignored. */
+    @Serializable
+    private class SearchEnvelope(
+        val root: SearchRoot = SearchRoot(),
+    )
+
+    @Serializable
+    private class SearchRoot(
+        val children: List<SearchHit> = emptyList(),
+    )
+
+    @Serializable
+    private class SearchHit(
+        val fields: VespaSummary? = null,
+    )
+
+    /** `/document/v1/…` get response. */
+    @Serializable
+    private class DocEnvelope(
+        val fields: VespaSummary? = null,
+    )
+
+    /**
+     * The summary a hit/doc carries (unknown keys ignored by [DECODER]). The
+     * recall path's trimmed select returns only the NIP-01 fields, so the search
+     * columns decode as null there (-> SearchFields.NONE); a full document get
+     * carries them, keeping get() lossless.
+     */
+    @Serializable
+    private class VespaSummary(
+        val id: String = "",
+        val pubkey: String = "",
+        @SerialName("created_at") val createdAt: Long = 0,
+        val kind: Int = 0,
+        val tags: String = "[]",
+        val content: String = "",
+        val sig: String = "",
+        val owner: String? = null,
+        val name: String? = null,
+        @SerialName("display_name") val displayName: String? = null,
+        val about: String? = null,
+        val nip05: String? = null,
+        val lud16: String? = null,
+        val website: String? = null,
+        @SerialName("search_primary") val primary: String? = null,
+        @SerialName("search_secondary") val secondary: String? = null,
+        @SerialName("search_text") val text: String? = null,
+        @SerialName("search_location") val location: String? = null,
+    )
+
     private companion object {
         const val NAMESPACE = "event"
         const val DOCTYPE = "event"
+
+        /** Lenient decoder: the response carries documentid/sddocname/relevance and, on some paths, extra fields we don't model. */
+        val DECODER = Json { ignoreUnknownKeys = true }
 
         /** Concurrent document-API gets for a pure-id lookup. Gets are light (no summary stage to overrun like big searches), so this floats well above QUERY_FANOUT. */
         const val ID_GET_FANOUT = 32
