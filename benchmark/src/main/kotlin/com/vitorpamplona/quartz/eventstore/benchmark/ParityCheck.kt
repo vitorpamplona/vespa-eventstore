@@ -164,6 +164,19 @@ object ParityCheck {
         if (pVals.size >= 2) specs += Spec("#p x${pVals.take(100).size}", Filter(tags = mapOf("p" to pVals.take(100)), limit = 300))
         if (eVals.size >= 2) specs += Spec("#e x${eVals.take(50).size}", Filter(tags = mapOf("e" to eVals.take(50)), limit = 200))
         specs += Spec("count follow-feed", Filter(authors = authors.take(300), kinds = listOf(1, 6, 7)), countOnly = true)
+        // Case sensitivity: NIP-01 tag values compare by exact bytes. The
+        // corpus's hashtags are Capitalized and never occur lowercased, so the
+        // exact value must match and the lowercased form must match NOTHING —
+        // on BOTH stores. (Vespa needed `match: cased` on tag_index for this;
+        // its attributes match case-insensitively by default.)
+        val tVal =
+            corpus
+                .flatMap { e -> e.tags.filter { it.size >= 2 && it[0] == "t" }.map { it[1] } }
+                .firstOrNull { it != it.lowercase() }
+        if (tVal != null) {
+            specs += Spec("#t exact-case", Filter(tags = mapOf("t" to listOf(tVal)), limit = 100))
+            specs += Spec("#t wrong-case matches nothing", Filter(tags = mapOf("t" to listOf(tVal.lowercase())), limit = 100))
+        }
         // Time windows.
         specs += Spec("since", Filter(kinds = listOf(1), since = tMid, limit = 200))
         specs += Spec("until", Filter(kinds = listOf(1), until = tMid, limit = 200))

@@ -211,7 +211,7 @@ much), so only structural changes are reliably attributable. Two landed:
    linearly. Single values and `tagsAll` (AND semantics — no `in` form) keep
    `contains`.
 
-Everything is gated by the parity harness (now **125/125**, including the
+Everything is gated by the parity harness (now **127/127**, including the
 list-shaped specs) and the vespa test suite. Measured id-lookup gain from (2):
 **+34–65 %** across runs. Server-side matching and the NIP-50 ranking cost are
 inherent to the engine and were left alone (search relevance is a feature, not
@@ -222,6 +222,93 @@ sets once per scan (was per-doc linear membership — a 300-author filter over a
 30k corpus was ~9M string compares per query). Same semantics; it just stops
 punishing exactly the list shapes under study, in the benchmark and in every
 store test that runs on the reference.
+
+## Schema & index study (vs SQLite's indexes) — A/B'd on live Vespa
+
+A review of the `event.sd` schema against Quartz's SQLite indexing, with each
+candidate change A/B-tested on a live single-node Vespa: fresh container per
+variant, the identical 30,793-doc corpus fed raw both times, the same
+rotating-window query shapes timed, and a **repeated baseline (v0 run twice)**
+to calibrate run noise (±8–9% on this class of box — anything inside that band
+is not a result).
+
+### Index coverage: SQLite ↔ this schema
+
+| SQLite index (`EventIndexesModule`) | Vespa equivalent |
+|---|---|
+| `UNIQUE (id)` | `id` fast-search attribute |
+| `(created_at DESC, id ASC)` | `created_at` fast-search attribute (+ `order by`) |
+| `(pubkey, created_at DESC)` | `pubkey` fast-search attribute |
+| `(kind, created_at DESC)` | `kind` fast-search attribute |
+| `(kind, pubkey, created_at DESC)` | posting-list intersection of the two |
+| `event_tags (tag_hash[, kind, pubkey_hash], created_at DESC)` | `tag_index` fast-search array |
+| `pubkey_owner_hash` | `owner` fast-search attribute |
+
+Coverage is complete. The structural difference: SQLite's composite indexes
+end in `created_at DESC` so newest-first order falls out of the index walk;
+Vespa intersects independent per-field posting lists, then sorts on the
+`created_at` attribute. Every filter the store issues hits a fast-search
+attribute — there are no unindexed scans.
+
+### CORRECTNESS: attribute matching was case-insensitive (now `match: cased`)
+
+Probing the live engine showed Vespa string attributes match **uncased by
+default**: a stored `t:MixedCase` matched `#t:["mixedcase"]` — and even a
+query for `T:MIXEDCASE`. NIP-01 tag values compare by exact bytes and SQLite's
+`tag_hash` is case-sensitive, so this was a real-Vespa-only spec divergence
+(the same class as the empty-`sig` bug: the in-memory reference and the mock
+compare strings exactly, and the old all-lowercase corpus could never catch
+it). Fixed with `match: cased` on `id`/`pubkey`/`owner`/`tag_index`; the
+corpus now gives ~20% of notes a Capitalized hashtag and the parity battery
+asserts the exact value matches while the lowercased form matches **nothing**,
+on both stores — so the gate holds on every future run.
+
+### `dictionary: hash` (shipped) and `rank: filter` (rejected)
+
+These four fields are only ever equality/`in`-matched — never range- or
+prefix-scanned — so the default B-tree term dictionary buys nothing; `hash`
+makes each term lookup O(1) in the number of unique terms (which grows with
+every event: each id is unique). Cased match is a prerequisite, so the
+correctness fix and this optimization ship together. Measured **at 30k docs:
+noise-level** (B-tree depth is tiny; follow-feed −3%, ids-set −6%, both inside
+the band) with **no cost** — feed rate unchanged (721 vs 710–727 docs/s). The
+win this buys is scale headroom, priced at zero.
+
+`rank: filter` on the filter attributes (compact rank-free posting lists) was
+the other candidate: **no read-side win beyond noise, and the two variants
+carrying it produced the two slowest feeds** (648 and 521 docs/s vs 710–727)
+— a write-side cost with no benefit at any tested shape. Not shipped.
+
+| variant | follow-feed | ids-set | tag-list | contact-sync | feed docs/s |
+|---|---:|---:|---:|---:|---:|
+| v0 baseline | 25.3 ms | 11.7 ms | 19.4 ms | 9.1 ms | 727 |
+| v0 repeat (noise) | 25.2 ms | 11.2 ms | 22.6 ms | 10.8 ms | 710 |
+| v1 hash-dict + cased | 24.5 ms | 11.0 ms | 19.6 ms | 9.0 ms | 721 |
+| v2 rank:filter | 30.6 ms | 11.8 ms | 17.6 ms | 11.0 ms | 648 |
+| v3 both | 26.0 ms | 11.6 ms | 28.3 ms | 9.0 ms | 521 |
+
+### Is the store reading more from disk than the filters need?
+
+The question was whether the many non-filter columns (search fields, grams)
+slow queries down by inflating what is read per hit. How Vespa actually lays
+this out:
+
+- **Matching and sorting never touch the disk blob.** Every field the filters
+  use is a fast-search attribute — in-memory posting lists and value arrays.
+  The extra columns are irrelevant to match cost.
+- **Summary fill reads the whole document blob per hit** from the document
+  store (disk, page-cached), no matter how few fields the query selects: a
+  document's fields are stored together in one compressed chunk. The
+  `SUMMARY_FIELDS` select-list trim cuts network transfer and client parse
+  (~35% fewer bytes measured), not the disk read itself.
+- The blob does carry dead weight on the read path: `search_text` duplicates
+  each note's `content`, and the profile/tier fields double a kind-0. Roughly
+  2× blob size for notes. Shrinking it would mean deriving the search fields
+  inside the schema (synthetic fields) — impossible here because extraction is
+  per-kind Kotlin logic — or splitting search fields into a separate document
+  type (a real option at scale, at the cost of dual writes). At benchmark
+  scale the blobs sit in page cache and summary fill is CPU-bound decompress +
+  copy, so this is documented as the known trade, not changed.
 
 ## Concurrent throughput and GC (`BENCH_THROUGHPUT=1`)
 
@@ -343,7 +430,7 @@ It runs SQLite ↔ in-memory reference always, and SQLite ↔ **real Vespa** whe
 `BENCH_VESPA_URL` is set. NIP-50 `search` is excluded (relevance ordering is
 engine-defined; FTS5 and BM25 legitimately differ).
 
-Current status: **125/125 checks agree** across SQLite, the in-memory reference,
+Current status: **127/127 checks agree** across SQLite, the in-memory reference,
 and real Vespa.
 
 ### A NIP-09 divergence the parity gate surfaced
