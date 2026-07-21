@@ -131,6 +131,30 @@ class VespaEventIndexTest {
         check(EventQuery(notKinds = listOf(0, 30382), authors = listOf(bob)))
     }
 
+    /**
+     * Pure-id recall takes the document-API direct-get fast path (up to one get
+     * wave); a larger id set falls back to a single `id in (…)` search. Both must
+     * agree with the in-memory spec — same set, same newest-first order, same
+     * NIP-40 expiry filtering, same limit.
+     */
+    @Test
+    fun `pure-id lookups match the spec on the get path and the search fallback`() {
+        val docs = (1..40).map { doc(kind = 1, at = (1000 + it).toLong()) }
+        // An expiring note to exercise the get path's NIP-40 guard.
+        val expiring = doc(kind = 1, tags = listOf(listOf("expiration", "2000")))
+        seed(*docs.toTypedArray(), expiring)
+
+        check(EventQuery(ids = listOf(docs[0].id))) // single id — get path
+        check(EventQuery(ids = docs.take(5).map { it.id })) // a handful — get path
+        check(EventQuery(ids = docs.take(10).map { it.id })) // newest-first across a set
+        check(EventQuery(ids = docs.map { it.id })) // 40 ids > one wave — search fallback
+        check(EventQuery(ids = listOf("f".repeat(64)))) // absent id — empty
+        check(EventQuery(ids = listOf(docs[3].id, "f".repeat(64), docs[7].id))) // present + absent
+        check(EventQuery(ids = listOf(expiring.id), notExpiredAt = 1000)) // not yet expired — kept
+        check(EventQuery(ids = listOf(expiring.id), notExpiredAt = 3000)) // expired — dropped
+        check(EventQuery(ids = docs.take(10).map { it.id }, limit = 3)) // limit after ordering
+    }
+
     /** `notKinds` excludes the plumbing kinds; the count is the full content match set. */
     @Test
     fun `count honors notKinds exclusion`() =
