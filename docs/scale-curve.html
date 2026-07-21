@@ -1,0 +1,150 @@
+<meta charset="utf-8">
+<title>SQLite vs Vespa — throughput vs corpus size</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --grid: #e4e3df;
+    --series-sqlite: #2a78d6;
+    --series-vespa: #eb6834;
+    font: 14px/1.45 system-ui, sans-serif;
+    background: var(--surface-1);
+    color: var(--text-primary);
+    padding: 24px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --grid: #33322f;
+      --series-sqlite: #3987e5;
+      --series-vespa: #d95926;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --grid: #33322f;
+    --series-sqlite: #3987e5;
+    --series-vespa: #d95926;
+  }
+  h1 { font-size: 19px; margin: 0 0 2px; }
+  .sub { color: var(--text-secondary); margin: 0 0 14px; font-size: 13px; }
+  .legend { display: flex; gap: 18px; margin: 0 0 10px; font-size: 13px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; }
+  .legend .sq::before { background: var(--series-sqlite); }
+  .legend .ve::before { background: var(--series-vespa); }
+  .grid-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .panel { min-width: 0; }
+  .panel h2 { font-size: 13.5px; margin: 0 0 2px; font-weight: 600; }
+  .panel .note { font-size: 12px; color: var(--text-secondary); margin: 0 0 4px; min-height: 16px; }
+  svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .tip {
+    position: fixed; pointer-events: none; background: var(--surface-1);
+    border: 1px solid var(--grid); border-radius: 6px; padding: 5px 8px;
+    font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.18); display: none; z-index: 5;
+  }
+  table.data { border-collapse: collapse; margin-top: 22px; font-size: 12.5px; width: 100%; }
+  table.data th, table.data td { border: 1px solid var(--grid); padding: 3px 8px; text-align: right; }
+  table.data th:first-child, table.data td:first-child { text-align: left; }
+  details { margin-top: 18px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+</style>
+<div class="viz-root">
+  <h1>Throughput vs corpus size — Quartz SQLite vs the Vespa store</h1>
+  <p class="sub">One prefix-stable corpus delta-ingested into both engines; measured at each checkpoint.
+     Single 4-core box, engines share cores with the client · log–log scales · seed 42 · <code>BENCH_SCALE_CURVE</code>.</p>
+  <div class="legend"><span class="sq">Quartz SQLite (memory)</span><span class="ve">Vespa store (single node)</span></div>
+  <div class="grid-panels" id="panels"></div>
+  <div class="tip" id="tip"></div>
+  <details><summary>Data table</summary><div id="tbl"></div></details>
+</div>
+<script>
+const SIZES = [25000, 50000, 100000, 200000, 400000];
+const DATA = {
+  "batch ingest (events/sec)": {
+    note: "crossover ≈ 150k — SQLite falls 16×, Vespa holds",
+    sqlite: [10029, 6233, 2889, 1479, 619],
+    vespa:  [623, 1698, 1793, 1690, 1502],
+  },
+  "author-timeline (q/s)": {
+    note: "crossover ≈ 75k — SQLite falls 13×, Vespa holds",
+    sqlite: [704, 377, 174, 104, 54],
+    vespa:  [187, 240, 284, 270, 221],
+  },
+  "follow-feed, 300 authors (q/s)": {
+    note: "crossover ≈ 35k",
+    sqlite: [58.3, 45.6, 36.2, 30.1, 24.5],
+    vespa:  [45.6, 71.1, 65.9, 74.2, 66.4],
+  },
+  "NIP-50 search (q/s)": {
+    note: "crossover ≈ 40k — FTS5 falls 18×, BM25 falls 3.5×",
+    sqlite: [83.0, 38.6, 18.0, 9.2, 4.5],
+    vespa:  [56.3, 65.9, 43.8, 28.8, 16.3],
+  },
+  "id-lookup (q/s)": {
+    note: "no crossover — in-process point reads stay ~85× ahead",
+    sqlite: [43419, 45891, 47258, 47308, 45216],
+    vespa:  [466, 511, 478, 536, 531],
+  },
+};
+const W = 340, H = 220, M = {t: 8, r: 12, b: 26, l: 46};
+const fmt = v => v >= 1000 ? (v / 1000) + "k" : String(v);
+const fmtVal = v => v >= 1000 ? Math.round(v).toLocaleString() : (v >= 100 ? Math.round(v) : v.toFixed(1));
+const panels = document.getElementById("panels");
+const tip = document.getElementById("tip");
+
+for (const [title, d] of Object.entries(DATA)) {
+  const all = d.sqlite.concat(d.vespa);
+  const lo = Math.pow(10, Math.floor(Math.log10(Math.min(...all))));
+  const hi = Math.pow(10, Math.ceil(Math.log10(Math.max(...all))));
+  const x = s => M.l + (Math.log10(s) - Math.log10(SIZES[0])) / (Math.log10(SIZES[4]) - Math.log10(SIZES[0])) * (W - M.l - M.r);
+  const y = v => M.t + (1 - (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo))) * (H - M.t - M.b);
+
+  let g = "";
+  for (let p = Math.log10(lo); p <= Math.log10(hi); p++) {
+    const v = Math.pow(10, p);
+    g += `<line x1="${M.l}" y1="${y(v)}" x2="${W - M.r}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>` +
+         `<text x="${M.l - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10.5" fill="var(--text-secondary)">${fmt(v)}</text>`;
+  }
+  for (const s of SIZES) {
+    g += `<text x="${x(s)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--text-secondary)">${fmt(s)}</text>`;
+  }
+  const line = (vals, cls) =>
+    `<polyline fill="none" stroke="var(--series-${cls})" stroke-width="2" stroke-linejoin="round" points="${vals.map((v, i) => `${x(SIZES[i])},${y(v)}`).join(" ")}"/>` +
+    vals.map((v, i) =>
+      `<circle cx="${x(SIZES[i])}" cy="${y(v)}" r="4" fill="var(--series-${cls})" stroke="var(--surface-1)" stroke-width="2"
+         data-t="${cls === "sqlite" ? "SQLite" : "Vespa"} · ${fmt(SIZES[i])} events · ${fmtVal(v)}"/>`).join("");
+  const lbl = (vals, cls, dy) =>
+    `<text x="${x(SIZES[4]) + 6}" y="${y(vals[4]) + dy}" font-size="11" font-weight="600" fill="var(--series-${cls})">${cls === "sqlite" ? "SQLite" : "Vespa"}</text>`;
+  const overlap = Math.abs(y(d.sqlite[4]) - y(d.vespa[4])) < 14;
+  const el = document.createElement("div");
+  el.className = "panel";
+  el.innerHTML = `<h2>${title}</h2><p class="note">${d.note}</p>
+    <svg viewBox="0 0 ${W + 52} ${H}">${g}${line(d.sqlite, "sqlite")}${line(d.vespa, "vespa")}
+      ${lbl(d.sqlite, "sqlite", overlap ? (d.sqlite[4] > d.vespa[4] ? -6 : 14) : 4)}${lbl(d.vespa, "vespa", overlap ? (d.vespa[4] > d.sqlite[4] ? -6 : 14) : 4)}</svg>`;
+  panels.appendChild(el);
+}
+document.addEventListener("pointermove", e => {
+  const t = e.target.closest("circle[data-t]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.textContent = t.dataset.t;
+  tip.style.display = "block";
+  tip.style.left = (e.clientX + 12) + "px";
+  tip.style.top = (e.clientY - 10) + "px";
+});
+let rows = "<table class='data'><tr><th>metric</th><th>engine</th>" + SIZES.map(s => `<th>${fmt(s)}</th>`).join("") + "</tr>";
+for (const [title, d] of Object.entries(DATA)) {
+  rows += `<tr><td rowspan="2">${title}</td><td>SQLite</td>${d.sqlite.map(v => `<td>${fmtVal(v)}</td>`).join("")}</tr>`;
+  rows += `<tr><td>Vespa</td>${d.vespa.map(v => `<td>${fmtVal(v)}</td>`).join("")}</tr>`;
+}
+document.getElementById("tbl").innerHTML = rows + "</table>";
+</script>
