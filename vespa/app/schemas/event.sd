@@ -586,4 +586,38 @@ schema event {
 
     rank-profile text inherits text_relevance {
     }
+
+    # TWO-PHASE variant of `text` (A/B under measurement; see
+    # docs/two-phase-ranking.html). Phase 1 scores every match with
+    # relevance() MINUS its two expensive within-band tie-breakers —
+    # fieldMatch proximity (a positional analysis per field per hit) and the
+    # match-quality ladder (itemRawScore, currently inert anyway) — which
+    # keeps BAND membership exact: the dropped terms (≤ ~280 points) can
+    # never cross the 1100-point token-match band gap. Phase 2 re-applies the
+    # full tuned relevance() to the top rerank-count hits per node, restoring
+    # today's exact within-band order inside the window. Query-time override:
+    # `ranking.rerankCount`.
+    rank-profile text2 inherits text_relevance {
+        function relevance_cheap() {
+            expression {
+                any_token_match() * 1100
+                + affiliation_match() * query(w_affil_tier_text)
+                + primary_text()
+                + tier_primary_text()
+                + query(w_secondary) * secondary_text()
+                + query(w_content) * bm25(search_text)
+                + query(w_location) * bm25(search_location)
+                + secondary_active() * query(w_about) * about_text()
+            }
+        }
+
+        first-phase {
+            expression: relevance_cheap()
+        }
+
+        second-phase {
+            expression: relevance()
+            rerank-count: 1000
+        }
+    }
 }

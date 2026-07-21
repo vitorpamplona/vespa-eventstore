@@ -97,6 +97,8 @@ object EventYql {
             params["ranking.features.query(user_q)"] = "{$observer:1.0}"
             q.minRank?.let { params["ranking.features.query(min_rank)"] = it.toString() }
         }
+        // Two-phase profiles only; the engine ignores it elsewhere.
+        q.rerankCount?.let { params["ranking.rerankCount"] = it.toString() }
 
         val where = if (clauses.isEmpty()) "true" else clauses.joinToString(" and ")
         // No text and no rank profile = plain relay REQ semantics: newest

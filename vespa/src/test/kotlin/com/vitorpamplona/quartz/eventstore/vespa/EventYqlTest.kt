@@ -160,6 +160,14 @@ class EventYqlTest {
     }
 
     @Test
+    fun `rerankCount rides out-of-band as a ranking parameter`() {
+        val q = EventYql.build(EventQuery(search = "vitor", ranking = "text2", rerankCount = 500))!!
+        assertEquals("500", q.params["ranking.rerankCount"])
+        assertEquals("text2", q.ranking)
+        assertNull(EventYql.build(EventQuery(kinds = listOf(1)))!!.params["ranking.rerankCount"], "absent unless set")
+    }
+
+    @Test
     fun `owners and expiry map to their attributes`() {
         val q = EventYql.build(EventQuery(owners = listOf(hexA), expiresBefore = 500))!!
         assertEquals("select ${EventYql.SUMMARY_FIELDS} from event where owner in (\"$hexA\") and expires_at < 500 order by created_at desc", q.yql)

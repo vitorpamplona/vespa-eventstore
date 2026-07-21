@@ -128,6 +128,14 @@ object EventStoreBenchmark {
             return
         }
 
+        // Ranking-change gate: order-fidelity + cost of a candidate rank profile
+        // vs the tuned baseline, per term class (see RankQuality).
+        if (System.getenv("BENCH_RANK_QUALITY") != null) {
+            requireNotNull(vespaUrl) { "BENCH_RANK_QUALITY needs BENCH_VESPA_URL" }
+            RankQuality.run(vespaUrl)
+            return
+        }
+
         // Throughput-vs-size curve: delta-ingest one prefix-stable corpus into
         // both engines and measure at each checkpoint (see ScaleCurve).
         if (System.getenv("BENCH_SCALE_CURVE") != null) {

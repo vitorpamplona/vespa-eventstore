@@ -544,7 +544,42 @@ scaling to concurrency 128 instead of plateauing. Config-only, so results/parity
 are unchanged. A latency-critical (few big queries) deployment
 would raise it instead.
 
-### NIP-50 search: two-phase ranking studied, not shipped
+### NIP-50 two-phase ranking: MEASURED at 489k — real but modest; not the default
+
+The corpus-size precondition from the study below was finally met (489k docs;
+"nostr" matches 100k), so the two-phase profile was built and gated properly:
+`text2` in the schema (phase 1 = `relevance()` minus its two expensive
+within-band tie-breakers — band-exact by construction; phase 2 = the full
+tuned `relevance()` over the top 1,000 per node, `ranking.rerankCount`
+overridable per query), judged by the new `BENCH_RANK_QUALITY` harness
+(overlap@10/50 + Kendall-τ vs the single-phase ground truth, per term class,
+with latency tails).
+
+**Quality: PASSED.** Every single-word class — common, rare, short — is
+IDENTICAL (overlap 1.00, τ 1.00). Multi-word terms show exactly the predicted
+proximity effect at the window edge: 2 of 4 terms at overlap@10 0.80 with
+τ ≥ 0.95 and membership ≥ 0.86@50. (The typo class matched nothing on kind-1
+content — its gram net covers profile/title fields, so that class needs
+kind-0 queries to bite.)
+
+**Performance: MISSED the ≥2× bar.** Consistent wins — 14 of 16 terms faster,
+median ~10–25%, best −29% ("bitcoin" 135.6 → 95.7ms p50), multi-word tails
+tightened most (p99 320 → 270ms) — but nowhere near 2×. The instructive
+finding is WHY: search at this scale is **match-bound, not rank-bound**. The
+first phase still pays full matching (weakAnd + gram OR-trees over 100k
+postings), and that, not the ranking math, is the floor. The scale curve's
+search degradation is therefore mostly *match-set growth*, and the next real
+lever would be match-phase approximation — a recall trade, a different and
+heavier decision than reranking.
+
+Verdict per the pre-declared criteria: **`text` stays the default**
+(single-phase, exact tuned order). `text2` remains in the schema — inert
+unless a query names it — so any operator can re-run
+`BENCH_RANK_QUALITY=1` on their corpus and flip if a 10–25% median win with
+the measured multi-word top-10 drift is the right trade for them. The
+harness is permanent: no future ranking change ships without it.
+
+### The original study (30k, 2026-07): two-phase studied, not shipped
 
 Search is the slowest query (ranking-bound: `relevance()` runs over every match —
 ~2,700 hits for a common term). A two-phase profile (cheap bm25-sum first-phase,
