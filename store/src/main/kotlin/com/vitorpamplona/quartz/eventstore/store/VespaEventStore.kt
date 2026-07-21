@@ -70,15 +70,23 @@ class VespaEventStore internal constructor(
          *
          * [relay] is the store's own relay url (NIP-62 vanish scope / NIP-42 identity)
          * when it sits behind a relay; leave it null for a bare store.
+         *
+         * [endpoints] names EVERY container endpoint of a multi-container
+         * cluster: the feed client spreads its HTTP/2 connections across all of
+         * them and reads round-robin, which beats funnelling writes through one
+         * load-balancer address. Empty (the default) = just [url]. See
+         * docs/scaling.md; a multi-node deployment pairs this with
+         * `autoDeploy = false` and an operator-owned application package.
          */
         fun open(
             url: String = "http://localhost:8080",
             relay: NormalizedRelayUrl? = null,
             autoDeploy: Boolean = true,
             configUrl: String = deriveConfigUrl(url),
+            endpoints: List<String> = emptyList(),
         ): VespaEventStore {
             if (autoDeploy) SchemaDeployer(configUrl).deployIfAbsent(url)
-            val events = VespaEventIndex(url)
+            val events = VespaEventIndex(url, endpoints = endpoints)
             val store = NostrEventStore(TrustProjection(events, VespaReputationIndex(url)), relay = relay)
             return VespaEventStore(store, events)
         }

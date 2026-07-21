@@ -75,12 +75,30 @@ import java.util.concurrent.Executors
  * caveat Vespa itself carries.
  */
 class VespaEventIndex(
-    private val baseUrl: String = System.getenv("VESPA_URL") ?: "http://localhost:8080",
+    baseUrl: String = System.getenv("VESPA_URL") ?: "http://localhost:8080",
     private val maxHits: Int = 10_000,
+    /**
+     * All container endpoints of the cluster; empty = just [baseUrl]. On a
+     * multi-container deployment, naming every endpoint here beats a load
+     * balancer for the WRITE path: the feed client natively spreads its HTTP/2
+     * connections across all of them (connections-per-endpoint applies to
+     * each). Reads round-robin per request. A single URL pointing at a load
+     * balancer also works — this is the more direct option, not the only one.
+     */
+    endpoints: List<String> = emptyList(),
 ) : EventIndex {
+    private val urls: List<String> = endpoints.ifEmpty { listOf(baseUrl) }.map { it.trimEnd('/') }
+
+    private val nextUrl =
+        java.util.concurrent.atomic
+            .AtomicInteger()
+
+    /** The endpoint for one HTTP read — round-robin across [urls]. */
+    private fun endpoint(): String = urls[Math.floorMod(nextUrl.getAndIncrement(), urls.size)]
+
     private val feed: FeedClient =
         FeedClientBuilder
-            .create(URI.create(baseUrl))
+            .create(urls.map { URI.create(it) })
             // The throttle FLOOR is what pins bulk ingest, and it is hard-wired to
             // minInflight = 2 x connectionsPerEndpoint. Under our bursty batched
             // writes (putAll bursts, then a gap while the next chunk dedups) the
@@ -115,7 +133,7 @@ class VespaEventIndex(
             .build()
 
     override suspend fun get(id: String): EventDoc? {
-        val resp = send("$baseUrl/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
+        val resp = send("${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
         if (resp.statusCode() == 404) return null
         require(resp.statusCode() < 400) { "vespa get ${resp.statusCode()}: ${resp.body().take(300)}" }
         return DECODER.decodeFromString<DocEnvelope>(resp.body()).fields?.toDoc()
@@ -223,7 +241,7 @@ class VespaEventIndex(
         // prefixes the list ONCE, not each field (else: ILLEGAL_PARAMETERS).
         val fieldSet = "$DOCTYPE:created_at" + if (withDTag) ",tag_index" else ""
         val base =
-            "$baseUrl/document/v1/$NAMESPACE/$DOCTYPE/docid" +
+            "${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid" +
                 "?selection=${URLEncoder.encode(selection, "UTF-8")}" +
                 "&wantedDocumentCount=$VISIT_PAGE&fieldSet=${URLEncoder.encode(fieldSet, "UTF-8")}"
         var continuation: String? = null
@@ -362,7 +380,7 @@ class VespaEventIndex(
             }.toString()
         val req =
             HttpRequest
-                .newBuilder(URI.create("$baseUrl/search/"))
+                .newBuilder(URI.create("${endpoint()}/search/"))
                 .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))

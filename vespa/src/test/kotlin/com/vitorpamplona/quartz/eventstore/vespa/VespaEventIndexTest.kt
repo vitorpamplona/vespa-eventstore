@@ -50,6 +50,26 @@ class VespaEventIndexTest {
 
     private var seq = 0
 
+    @Test
+    fun `multi-endpoint client round-robins reads and feeds every endpoint`() =
+        runBlocking {
+            // Two endpoint entries pointing at the same engine: every request must
+            // land somewhere valid whichever slot the round-robin picks, and the
+            // feed client must accept the multi-URI form.
+            val multi = VespaEventIndex(endpoints = listOf(mock.url, mock.url))
+            try {
+                val d = doc(kind = 1, content = "multi endpoint")
+                multi.put(d)
+                assertEquals(d.id, multi.get(d.id)?.id)
+                assertEquals(d.id, multi.get(d.id)?.id, "second get takes the other endpoint slot")
+                assertEquals(listOf(d.id), multi.search(EventQuery(ids = listOf(d.id))).map { it.id })
+                multi.remove(d.id)
+                assertNull(multi.get(d.id))
+            } finally {
+                multi.close()
+            }
+        }
+
     private fun doc(
         kind: Int = 1,
         pubkey: String = "a1".repeat(32),

@@ -168,7 +168,10 @@ For a commit snapshot, JitPack works:
 - **The schema ships with the code.** The Vespa application package is bundled into
   the `:vespa` jar and `open(autoDeploy = true)` deploys it to a fresh Vespa on first
   run — so the schema and the query builder can never drift. An operator who owns
-  deployment out of band can pass `autoDeploy = false`.
+  deployment out of band can pass `autoDeploy = false` — that is also the path to a
+  multi-node cluster: [`docs/scaling.md`](docs/scaling.md) is the operator guide
+  (own the topology, keep the schemas verbatim, name every container endpoint in
+  `open(endpoints = …)`).
 
 ## Developer Setup
 
