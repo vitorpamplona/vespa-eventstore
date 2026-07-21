@@ -74,6 +74,7 @@ internal object Rejections {
 internal class BulkInsert(
     private val index: EventIndex,
     private val relay: NormalizedRelayUrl?,
+    private val guards: GuardOwners,
     private val probe: suspend (Event) -> Unit,
 ) {
     /**
@@ -135,14 +136,18 @@ internal class BulkInsert(
         // now it is a handful. (Downstream, an owner whose set still hits GUARD_PAGE
         // falls back to the exact per-event probe, unchanged.)
         val owners = alive().groupBy { events[it].owner() }
-        val guards =
+        val guardSets =
             IngestStats.timed("guards") {
-                val tombs = guardDocs(owners.keys, DeletionEvent.KIND)
-                val vanishes = guardDocs(owners.keys, RequestToVanishEvent.KIND)
+                // Only owners with any stored tombstone/vanish can have guard
+                // docs at all (GuardOwners); everyone else's sets are provably
+                // empty — usually ALL of a content batch, skipping both queries.
+                val flagged = guards.filterFlagged(owners.keys)
+                val tombs = if (flagged.isEmpty()) emptyMap() else guardDocs(flagged, DeletionEvent.KIND)
+                val vanishes = if (flagged.isEmpty()) emptyMap() else guardDocs(flagged, RequestToVanishEvent.KIND)
                 owners.keys.associateWith { (tombs[it].orEmpty() to vanishes[it].orEmpty()) }
             }
         for ((owner, idxs) in owners) {
-            val (tombs, vanishes) = guards.getValue(owner)
+            val (tombs, vanishes) = guardSets.getValue(owner)
             if (tombs.size >= GUARD_PAGE || vanishes.size >= GUARD_PAGE) {
                 // Guard set larger than a page: the batched view could miss one.
                 // Exactness over speed — run these events through the per-event probes.
