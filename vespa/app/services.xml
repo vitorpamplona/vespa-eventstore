@@ -12,8 +12,16 @@
   <content id="content" version="1.0">
     <redundancy>1</redundancy>
 
-    <documents>
-      <document type="event" mode="index" />
+    <documents garbage-collection="true">
+      <!-- NIP-40 expiry as a SERVER-SIDE constraint: the engine periodically
+           (default hourly) removes every event whose expires_at has passed —
+           the closest Vespa has to a SQLite trigger. expires_at is ALWAYS
+           written (Long.MAX_VALUE = never expires), so the selection keeps
+           every non-expiring doc. The store's own guards stay: the read-time
+           `expires_at > now` filter (expiry must be exact, GC is periodic)
+           and the insert-time block on already-expired events (which needs no
+           round trip — the expiration tag is on the event itself). -->
+      <document type="event" mode="index" selection="event.expires_at &gt; now()" />
       <!-- Ranking state per pubkey; GLOBAL so event docs can reference it and
            import the trust tensors into their own ranking (parent/child). -->
       <document type="reputation" mode="index" global="true" />
