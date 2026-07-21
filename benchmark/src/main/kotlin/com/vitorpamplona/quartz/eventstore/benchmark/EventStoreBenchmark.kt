@@ -101,6 +101,33 @@ object EventStoreBenchmark {
             return
         }
 
+        // Ingest stage profile: run a bulk ingest against a live Vespa and print
+        // the store's own per-stage wall-time split (dedup/guards/versions/write/
+        // proj.*) plus the feed-client gauge — where each batchInsert millisecond
+        // goes, before optimizing any of it.
+        if (System.getenv("BENCH_INGEST_PROFILE") != null) {
+            requireNotNull(vespaUrl) { "BENCH_INGEST_PROFILE needs BENCH_VESPA_URL" }
+            val n = env("BENCH_PROFILE_SIZE", 20_000)
+            val band = System.getenv("BENCH_ID_BAND")?.toLongOrNull(16) ?: 0xE0L
+            val events = NostrCorpus.generate(NostrCorpus.Config(size = n, seed = seed + 31, idBand = band))
+            com.vitorpamplona.quartz.eventstore.store.VespaEventStore.open(vespaUrl).use { store ->
+                com.vitorpamplona.quartz.eventstore.vespa.IngestStats
+                    .gauge() // reset the deltas
+                val nanos =
+                    kotlin.system.measureNanoTime {
+                        runBlocking { events.chunked(batch).forEach { store.batchInsert(it) } }
+                    }
+                val secs = nanos / 1e9
+                println(String.format("ingested %d events (batch %d) in %.1fs = %.0f events/sec", n, batch, secs, n / secs))
+                println(
+                    com.vitorpamplona.quartz.eventstore.vespa.IngestStats
+                        .gauge(),
+                )
+                println(store.feedGauge())
+            }
+            return
+        }
+
         // Throughput-vs-size curve: delta-ingest one prefix-stable corpus into
         // both engines and measure at each checkpoint (see ScaleCurve).
         if (System.getenv("BENCH_SCALE_CURVE") != null) {

@@ -321,6 +321,37 @@ overlap outside the writer lock, commits serialize behind it — and if the
 streams are split by owner, this is exactly the multi-lane ingest shape from
 docs/multi-node-consistency.md.)
 
+## Ingest stage profile (`BENCH_INGEST_PROFILE=1`) — where the ceiling actually is
+
+The profile mode books each `batchInsert`'s wall time into the store's own
+stage counters and prints the split plus the feed-client gauge. On the live
+400k corpus (batch 1000): **the write stage — the pipelined `putAll` awaiting
+engine acks — is 69% of wall time** (10.2s of ~15s per 20k events); the read
+stages (dedup, guards, versions) barely register. Average per-put latency
+inside a burst is ~56ms versus ~6ms for a lone put: the puts queue.
+
+The obvious suspect — the feed client's throttle window — was then swept and
+**acquitted**: connections 32→64, streams 128→256, and every combination
+land within noise (1,306–1,322 ev/s, write stage unchanged), and more
+connections only raise per-put latency (57→92ms) while throughput holds.
+That is the signature of a server-side ceiling, and `docker stats` confirms
+it: during ingest the engine runs ~1.5 cores while the client JVM
+(serialization + guard reads) takes much of the rest — the shared 4-core box
+is the bottleneck, not the client pipeline.
+
+Practical conclusions:
+
+- **Client-side ingest tuning is exhausted.** Chunk ~1,000 × 2 streams (the
+  sweep's sweet spot) is the ceiling this box allows; no feed-window knob
+  moves it. The knobs are now overridable anyway
+  (`VESPA_FEED_CONNECTIONS` / `VESPA_FEED_STREAMS` /
+  `VESPA_FEED_INFLIGHT_FACTOR`) for hosts with more cores, where the
+  defaults' small-core compromise no longer applies.
+- **The remaining ingest levers are topology**, exactly as docs/scaling.md
+  lays out: separate client hardware (stop sharing cores with proton), more
+  engine cores, owner-lane parallel writers, multi-node. The fbench study
+  reached the same conclusion for reads.
+
 ## Mixed read/write load (`BENCH_MIXED=1`)
 
 A relay never serves REQs from a quiet store — queries arrive while syncs

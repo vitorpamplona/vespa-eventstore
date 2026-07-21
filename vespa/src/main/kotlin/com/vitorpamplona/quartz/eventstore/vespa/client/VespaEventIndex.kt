@@ -114,8 +114,13 @@ class VespaEventIndex(
             // (Jetty reserves 16). 32 keeps headroom. (The old reflective
             // setInitialInflightFactor knob was dead: the 8.7 throttler ignores it —
             // the initial target is already maxInflight.)
-            .setConnectionsPerEndpoint(32)
-            .setMaxStreamPerConnection(128)
+            // Overridable for deployment tuning (and the benchmark's feed-window
+            // grid): VESPA_FEED_CONNECTIONS / VESPA_FEED_STREAMS /
+            // VESPA_FEED_INFLIGHT_FACTOR. Defaults are the measured sweet spot
+            // for a small-core single-node host.
+            .setConnectionsPerEndpoint(System.getenv("VESPA_FEED_CONNECTIONS")?.toIntOrNull() ?: 32)
+            .setMaxStreamPerConnection(System.getenv("VESPA_FEED_STREAMS")?.toIntOrNull() ?: 128)
+            .apply { System.getenv("VESPA_FEED_INFLIGHT_FACTOR")?.toIntOrNull()?.let { setInitialInflightFactor(it) } }
             .setRetryStrategy(
                 object : FeedClient.RetryStrategy {
                     // Bounded: a dead Vespa should surface as failed ops, not a hang.
