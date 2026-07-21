@@ -91,15 +91,6 @@ schema event {
             attribute: fast-search
         }
 
-        # kind-10002 docs only: the author's NIP-65 write/both relays,
-        # normalized at feed time. Makes the outbox directory a pure query —
-        # "who writes to relay X" is recall, the relay list is one grouping
-        # query. See docs/v2-sync-proposal.md.
-        field write_relays type array<string> {
-            indexing: attribute | summary
-            attribute: fast-search
-        }
-
         # Reference to the author's ranking state (the global `profile`
         # parent). Written on every doc as "id:profile:profile::<pubkey>";
         # the imported tensors below are what let ANY kind rank by the
