@@ -163,17 +163,18 @@ object VespaRunner {
     ) = runBlocking {
         repeat((reps / 10).coerceIn(1, 50)) { runCatching { op(it) } }
         var checksum = 0L
+        val lat = Latencies()
         val nanos =
             measureNanoTime {
                 runBlocking {
                     repeat(reps) { i ->
-                        val r = runCatching { op(i) }.getOrNull()
+                        val r = lat.timed { runCatching { op(i) }.getOrNull() }
                         if (r is Collection<*>) checksum += r.size
                     }
                 }
             }
         val secs = nanos / 1e9
-        println(String.format("%-20s %10d %14s %12.2f %10d", name, reps, num(reps / secs), nanos / 1000.0 / reps, checksum))
+        println(String.format("%-20s %10d %14s %12.2f %10d  %s", name, reps, num(reps / secs), nanos / 1000.0 / reps, checksum, lat.summary()))
     }
 
     private fun report(
@@ -186,7 +187,7 @@ object VespaRunner {
     }
 
     private object Header {
-        fun query() = println(String.format("%-20s %10s %14s %12s %10s", "query", "reps", "queries/sec", "µs/query", "Σresults"))
+        fun query() = println(String.format("%-20s %10s %14s %12s %10s  %s", "query", "reps", "queries/sec", "µs/query", "Σresults", "latency tail"))
     }
 
     private fun num(v: Double) = if (v >= 1000) String.format("%,d", v.toLong()) else String.format("%.1f", v)

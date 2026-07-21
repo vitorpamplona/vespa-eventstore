@@ -85,6 +85,7 @@ object MixedLoadBench {
                 val written = AtomicLong()
                 val queries = AtomicLong()
                 val hits = AtomicLong()
+                val queryLat = Latencies()
                 val start = System.nanoTime()
                 val deadline = start + durMs * 1_000_000
                 withContext(Dispatchers.Default) {
@@ -103,13 +104,15 @@ object MixedLoadBench {
                             var i = ri
                             while (System.nanoTime() < deadline) {
                                 val r =
-                                    runCatching {
-                                        if (i % 2 == 0) {
-                                            store.query<Event>(Filter(authors = w.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500))
-                                        } else {
-                                            store.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50))
-                                        }
-                                    }.getOrNull()
+                                    queryLat.timed {
+                                        runCatching {
+                                            if (i % 2 == 0) {
+                                                store.query<Event>(Filter(authors = w.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500))
+                                            } else {
+                                                store.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50))
+                                            }
+                                        }.getOrNull()
+                                    }
                                 queries.incrementAndGet()
                                 hits.addAndGet((r?.size ?: 0).toLong())
                                 i += nReaders
@@ -120,11 +123,12 @@ object MixedLoadBench {
                 val secs = (System.nanoTime() - start) / 1e9
                 println(
                     String.format(
-                        "%-12s %8s ingest-ev/s %10s query-q/s %12s query-ev/s",
+                        "%-12s %8s ingest-ev/s %10s query-q/s %12s query-ev/s  %s",
                         label,
                         num(written.get() / secs),
                         num(queries.get() / secs),
                         num(hits.get() / secs),
+                        queryLat.summary(),
                     ),
                 )
             }

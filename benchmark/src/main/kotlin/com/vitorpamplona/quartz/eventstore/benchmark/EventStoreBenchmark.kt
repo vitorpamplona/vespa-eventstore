@@ -81,6 +81,14 @@ object EventStoreBenchmark {
             return
         }
 
+        // Bulk-ingest sweep: chunk size x parallel streams against a live Vespa
+        // (see IngestSweep) — which knob raises the throttle-floor-bound ingest.
+        if (System.getenv("BENCH_INGEST_SWEEP") != null) {
+            requireNotNull(vespaUrl) { "BENCH_INGEST_SWEEP needs BENCH_VESPA_URL" }
+            IngestSweep.run(vespaUrl, seed)
+            return
+        }
+
         // Mixed read/write load against a live Vespa: read-only and write-only
         // baselines, then both at once (see MixedLoadBench). The main corpus is
         // generated only to SAMPLE the read workload — the store is assumed
@@ -272,16 +280,17 @@ object EventStoreBenchmark {
         val warm = (reps / 10).coerceIn(1, 100)
         repeat(warm) { runCatching { op(it) } }
         var checksum = 0L
+        val lat = Latencies()
         val nanos =
             measureNanoTime {
                 runBlocking {
                     repeat(reps) { i ->
-                        val r = runCatching { op(i) }.getOrNull()
+                        val r = lat.timed { runCatching { op(i) }.getOrNull() }
                         if (r is Collection<*>) checksum += r.size
                     }
                 }
             }
-        Table.queryRow(name, reps, nanos, checksum)
+        Table.queryRow(name, reps, nanos, checksum, lat)
     }
 
     // ---- helpers -----------------------------------------------------------
@@ -306,16 +315,17 @@ object EventStoreBenchmark {
             println(String.format("%-42s %12d %14s %12.2f", name, events, fmt(perSec), microsEach))
         }
 
-        fun queryHeader() = println(String.format("%-20s %10s %14s %12s %10s", "query", "reps", "queries/sec", "µs/query", "Σresults"))
+        fun queryHeader() = println(String.format("%-20s %10s %14s %12s %10s  %s", "query", "reps", "queries/sec", "µs/query", "Σresults", "latency tail"))
 
         fun queryRow(
             name: String,
             reps: Int,
             nanos: Long,
             checksum: Long,
+            lat: Latencies,
         ) {
             val secs = nanos / 1e9
-            println(String.format("%-20s %10d %14s %12.2f %10d", name, reps, fmt(reps / secs), nanos / 1000.0 / reps, checksum))
+            println(String.format("%-20s %10d %14s %12.2f %10d  %s", name, reps, fmt(reps / secs), nanos / 1000.0 / reps, checksum, lat.summary()))
         }
 
         private fun fmt(v: Double) = if (v >= 1000) String.format("%,d", v.toLong()) else String.format("%.1f", v)

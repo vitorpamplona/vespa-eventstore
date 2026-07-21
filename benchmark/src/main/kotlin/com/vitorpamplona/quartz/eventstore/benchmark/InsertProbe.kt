@@ -43,11 +43,13 @@ object InsertProbe {
         val events = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed + 7, idBand = band))
         VespaEventStore.open(url).use { store ->
             var ok = 0
-            val freshNanos = measureNanoTime { for (e in events) if (runCatching { store.insert(e) }.isSuccess) ok++ }
-            report("fresh insert()", ok, size, freshNanos)
+            val freshLat = Latencies()
+            val freshNanos = measureNanoTime { for (e in events) if (freshLat.timed { runCatching { store.insert(e) } }.isSuccess) ok++ }
+            report("fresh insert()", ok, size, freshNanos, freshLat)
             var dup = 0
-            val dupNanos = measureNanoTime { for (e in events) if (runCatching { store.insert(e) }.isFailure) dup++ }
-            report("dup re-insert()", dup, size, dupNanos)
+            val dupLat = Latencies()
+            val dupNanos = measureNanoTime { for (e in events) if (dupLat.timed { runCatching { store.insert(e) } }.isFailure) dup++ }
+            report("dup re-insert()", dup, size, dupNanos, dupLat)
         }
     }
 
@@ -56,8 +58,9 @@ object InsertProbe {
         counted: Int,
         total: Int,
         nanos: Long,
+        lat: Latencies,
     ) {
         val secs = nanos / 1e9
-        println(String.format("%-16s %6d/%d %12.1f events/sec %10.1f µs/event", op, counted, total, total / secs, nanos / 1000.0 / total))
+        println(String.format("%-16s %6d/%d %12.1f events/sec %10.1f µs/event  %s", op, counted, total, total / secs, nanos / 1000.0 / total, lat.summary()))
     }
 }

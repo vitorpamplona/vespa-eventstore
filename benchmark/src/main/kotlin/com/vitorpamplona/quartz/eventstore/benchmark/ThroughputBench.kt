@@ -71,25 +71,27 @@ object ThroughputBench {
             )
 
         println("\n-- concurrent throughput (events/sec after warmup; target 50,000) --")
-        println(String.format("%-16s %5s %13s %12s %10s %12s", "query", "conc", "events/sec", "queries/sec", "GC ms", "bytes/event"))
+        println(String.format("%-16s %5s %13s %12s %10s %12s  %s", "query", "conc", "events/sec", "queries/sec", "GC ms", "bytes/event", "latency tail"))
         for ((name, _, op) in shapes) {
             // Warm up this shape (JIT + connection pool) before measuring.
             drive(concurrency = 8, durationMs = (durationMs / 2).coerceAtLeast(1_000), op = op)
             for (c in concurrencies) {
-                val s = drive(c, durationMs, op)
+                val lat = Latencies()
+                val s = drive(c, durationMs, op, lat)
                 val secs = s.wallNanos / 1e9
                 val eps = s.events / secs
                 val qps = s.queries / secs
                 val bytesPerEvent = if (s.events > 0) s.bytesAllocated / s.events else 0
                 println(
                     String.format(
-                        "%-16s %5d %13s %12s %10d %12d",
+                        "%-16s %5d %13s %12s %10d %12d  %s",
                         name,
                         c,
                         num(eps),
                         num(qps),
                         s.gcMillis,
                         bytesPerEvent,
+                        lat.summary(),
                     ),
                 )
             }
@@ -101,6 +103,7 @@ object ThroughputBench {
         concurrency: Int,
         durationMs: Long,
         op: suspend (Int) -> Int,
+        lat: Latencies? = null,
     ): Sample {
         val gcBeans = ManagementFactory.getGarbageCollectorMXBeans()
 
@@ -128,7 +131,9 @@ object ThroughputBench {
                     var q = 0L
                     var e = 0L
                     while (System.nanoTime() < deadline) {
+                        val t0 = System.nanoTime()
                         e += runCatching { op(i) }.getOrDefault(0)
+                        lat?.record(System.nanoTime() - t0)
                         q++
                         i += concurrency
                     }
