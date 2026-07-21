@@ -179,7 +179,23 @@ are fighting over the same 4 cores here, separate hardware would go higher.
 Throughput measured immediately after a heavy ingest drops (~48k) while proton
 flushes in the background — the steady-state number is the representative one.
 
+**How much higher on separate hardware?** `vespa-fbench` run *inside* the
+container (no JVM client parsing on the same cores) isolates Vespa's own ceiling:
+
+| query | Vespa Q/s | events/sec | JVM-client events/sec |
+|---|---:|---:|---:|
+| kind-scan (200) | 527 | **~105,000** | ~78,000 |
+| author-timeline (50) | 1,578 | **~79,000** | ~24,000 |
+
+QPS plateaus (16→64 clients) while p99 climbs 50→185 ms — Vespa is CPU-bound, not
+thread-starved. The **author-timeline 24k → 79k gap proves the client-side
+response parse/reconstruction was the shared-host limiter**, which is exactly what
+the GC work below attacks.
+
 ### GC findings
+
+Two optimizations roughly **halved per-event allocation on bulk reads**
+(kind-scan 9,230 → 4,843 bytes/event, author-timeline 12,800 → 8,479):
 
 - **Trimmed summary fields (above) directly cut allocation** — fewer response
   bytes to parse per hit.
@@ -195,9 +211,24 @@ flushes in the background — the steady-state number is the representative one.
   `EventReconstructionTest` pins each mapped kind to `fromJson`'s exact subclass
   and serialization. Measured: **kind-scan 9,230 → 6,181 bytes/event (−33%)**,
   author-timeline 12,800 → 9,887 (−23%).
-- Remaining floor for tiny results (id-lookup ~46 KB/event): the Vespa response
-  is parsed into a full immutable `JsonElement` tree per query. A streaming
-  decode and a lazy raw-tags path on `EventDoc` would shave it further.
+- **Streaming response decode** (applied): the recall path parsed each response
+  into a full immutable `JsonElement` tree, then walked it. It now decodes hits
+  straight into flat `@Serializable` DTOs (allocating the target objects, not a
+  wrapper per field); the count/grouping paths still build the tree. `get()`
+  stays lossless (the DTO carries the search columns too). Measured on top of the
+  above: **kind-scan 6,181 → 4,843 (−22%)**, author-timeline 9,887 → 8,479 (−14%).
+- Remaining floor for tiny results (id-lookup ~45 KB/event): with the tree gone,
+  what's left is the JDK HttpClient's per-request allocation plus the query
+  objects — inherent to a 1-doc round trip, not JSON.
+
+### Insert-side latency
+
+The per-event `insert()` path ran its three independent admission reads — dedup,
+NIP-09 tombstone, NIP-62 vanish — strictly in series. They now fire concurrently
+and are checked in the original precedence, so a per-event insert pays one round
+trip's latency for the guards instead of three (the bulk `batchInsert` path,
+which already batches these, is untouched). All 135 store+vespa tests, including
+the full NIP-09/40/62 semantics suite, still pass.
 
 ### Vespa config studied
 
@@ -207,6 +238,30 @@ query across cores. Measured: bulk throughput ~66k → ~76k events/sec and it ke
 scaling to concurrency 128 instead of plateauing. Config-only, so results/parity
 are unchanged (still 119/119). A latency-critical (few big queries) deployment
 would raise it instead.
+
+### NIP-50 search: two-phase ranking studied, not shipped
+
+Search is the slowest query (ranking-bound: `relevance()` runs over every match —
+~2,700 hits for a common term). A two-phase profile (cheap bm25-sum first-phase,
+then `relevance()` reranking the top 200) was measured against the current
+single-phase `text` profile on the corpus. It **reordered results** — the top-50
+overlapped 49–50/50 but the top-10 changed for 4 of 5 terms — while the speedup
+was **marginal and noisy at this scale** (6→4 ms one term, 5→7 ms another). So it
+trades the tuned relevance for a speedup that only materializes on far larger
+match sets. **Not shipped**: it needs a corpus large enough for the win to appear
+*and* a relevance-quality regression harness (representative signed data) to
+prove the reranking is acceptable — search relevance is a headline feature, not
+overhead to cut blind.
+
+## CI correctness gate
+
+`VespaParityIT` (`:benchmark`) stands up a real Vespa via testcontainers, ingests
+the corpus, and asserts this store matches Quartz's SQLite store on the whole
+NIP-01 battery — the gate the in-memory reference can't provide (only a real
+Vespa exercises YQL, the streaming decode, the get fast path, and reconstruction
+end to end; the empty-`sig` bug was real-Vespa-only). It is tagged `integration`,
+excluded from the fast default build, run by a dedicated CI job with
+`-Pintegration`, and self-skips where no Docker daemon is present.
 
 ## Correctness parity (SQLite ↔ this store)
 
