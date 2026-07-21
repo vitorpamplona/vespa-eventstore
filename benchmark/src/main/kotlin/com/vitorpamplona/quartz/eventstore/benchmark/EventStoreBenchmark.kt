@@ -239,15 +239,24 @@ object EventStoreBenchmark {
         batch: Int,
         factory: () -> IEventStore,
     ) = runBlocking {
-        // Per-event insert().
+        // Per-event insert() measured AT CORPUS SCALE: preload everything but a
+        // probe tail via the bulk path, then time per-event inserts on top —
+        // the same shape as the real-Vespa probe. Per-event-inserting the FULL
+        // corpus would measure the same thing and take hours at 1M (SQLite's
+        // admission SELECTs degrade as the table grows — which this probe
+        // captures, at the corpus's real size, in minutes). At corpus sizes up
+        // to the probe cap the preload is empty and semantics are unchanged.
+        val probe = corpus.takeLast(PER_EVENT_PROBE.coerceAtMost(corpus.size))
+        val preload = corpus.dropLast(probe.size)
         val single = factory()
+        runBlocking { preload.chunked(1_000).forEach { single.batchInsert(it) } }
         val singleNanos =
             measureNanoTime {
-                runBlocking { for (e in corpus) runCatching { single.insert(e) } }
+                runBlocking { for (e in probe) runCatching { single.insert(e) } }
             }
         single.close()
 
-        // Bulk batchInsert().
+        // Bulk batchInsert() over the FULL corpus.
         val bulk = factory()
         val bulkNanos =
             measureNanoTime {
@@ -255,9 +264,13 @@ object EventStoreBenchmark {
             }
         bulk.close()
 
-        Table.row("$name  insert()", corpus.size, singleNanos)
+        val probeLabel = if (preload.isEmpty()) "insert()" else "insert() @${preload.size / 1_000}k preloaded"
+        Table.row("$name  $probeLabel", probe.size, singleNanos)
         Table.row("$name  batchInsert($batch)", corpus.size, bulkNanos)
     }
+
+    /** Per-event insert probe size — enough samples for a stable rate at any corpus size. */
+    private const val PER_EVENT_PROBE = 30_000
 
     // ---- query throughput --------------------------------------------------
 
