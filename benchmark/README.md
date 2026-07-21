@@ -157,6 +157,52 @@ Measured id-lookup gain: **+34–65 %** across runs. Server-side matching and th
 NIP-50 ranking cost are inherent to the engine and were left alone (search
 relevance is a feature, not overhead to cut).
 
+## Concurrent throughput and GC (`BENCH_THROUGHPUT=1`)
+
+The latency suite issues one query at a time, so its throughput is capped by a
+single round trip (~250 q/s). A relay's load is *concurrent*, so `ThroughputBench`
+drives the store from N coroutines for a fixed duration and reports events/sec,
+queries/sec, GC time, and **bytes allocated per event** (from the JVM beans) at
+rising concurrency — the real metric, and the GC lens.
+
+Steady-state, single 4-core node that the benchmark client *shares*, ~15k-doc
+corpus, `numthreadspersearch=1`:
+
+| query (events/query) | events/sec @128 | bytes/event |
+|---|---:|---:|
+| kind-scan (200) | **~66,000–76,000** | ~9,200 |
+| author-timeline (50) | ~27,000 | ~12,800 |
+| id-lookup (1) | ~6,000 q/s | ~49,000 |
+
+**Bulk reads clear the 50k events/sec target**, and because the client and Vespa
+are fighting over the same 4 cores here, separate hardware would go higher.
+Throughput measured immediately after a heavy ingest drops (~48k) while proton
+flushes in the background — the steady-state number is the representative one.
+
+### GC findings
+
+- **Trimmed summary fields (above) directly cut allocation** — fewer response
+  bytes to parse per hit.
+- **`getByIds` short-circuits the single-id REQ** past the `mapBounded` fan-out
+  (coroutineScope + Semaphore + async all allocate per call).
+- The **floor is the reconstruction round-trip**: the store returns *typed*
+  subclasses (MetadataEvent, TextNoteEvent, …) — verified identical to SQLite's —
+  and Quartz only builds those via `Event.fromJson(String)`, so every result is
+  `EventDoc → JSON string → typed Event` (a serialize + parse). That is the bulk
+  of `bytes/event`. Removing it safely needs a Quartz **kind→fields factory**
+  (construct the typed event directly, no JSON) — a recommended upstream API, not
+  something to hand-roll here (a wrong kind→class map would silently mis-type
+  results). A lazy raw-tags path on `EventDoc` would shave the double tag parse.
+
+### Vespa config studied
+
+`numthreadspersearch=1` (one matching thread per query): for concurrent serving
+this keeps cores saturated with *independent* queries instead of splitting one
+query across cores. Measured: bulk throughput ~66k → ~76k events/sec and it kept
+scaling to concurrency 128 instead of plateauing. Config-only, so results/parity
+are unchanged (still 119/119). A latency-critical (few big queries) deployment
+would raise it instead.
+
 ## Correctness parity (SQLite ↔ this store)
 
 The benchmark is also a **correctness gate**: `ParityCheck` loads the identical
