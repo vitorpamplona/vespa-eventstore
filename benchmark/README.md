@@ -223,6 +223,29 @@ sets once per scan (was per-doc linear membership — a 300-author filter over a
 punishing exactly the list shapes under study, in the benchmark and in every
 store test that runs on the reference.
 
+## Mixed read/write load (`BENCH_MIXED=1`)
+
+A relay never serves REQs from a quiet store — queries arrive while syncs
+feed it. `MixedLoadBench` measures the interference directly: a read-only
+baseline (16 readers looping follow-feed + author-timeline), a write-only
+baseline (2 writers streaming `batchInsert(500)` of fresh id-band-disjoint
+events), then both at once, then reads again immediately after. Measured on
+the 4-core box (client and Vespa sharing cores), ~35k-doc corpus:
+
+| mode | ingest ev/s | query q/s | query ev/s |
+|---|---:|---:|---:|
+| read-only | — | 449 | 64,443 |
+| write-only | 802 | — | — |
+| **mixed** | **556 (−31%)** | **191 (−57%)** | **30,704 (−52%)** |
+| post-ingest reads | — | 458 | 65,997 |
+
+Both sides pay for concurrency: ingest keeps ~70% of its throughput, queries
+keep ~half. Recovery is immediate — the post-ingest read pass is back at the
+baseline, so the "flush shadow" seen after a full 30k ingest does not appear
+at this write volume. On this box the interference is largely CPU contention
+(three processes on four cores); separate client hardware would soften it,
+which is exactly what this bench exists to verify per deployment.
+
 ## Schema & index study (vs SQLite's indexes) — A/B'd on live Vespa
 
 A review of the `event.sd` schema against Quartz's SQLite indexing, with each

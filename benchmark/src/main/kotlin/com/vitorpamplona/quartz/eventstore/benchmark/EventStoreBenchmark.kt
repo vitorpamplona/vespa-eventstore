@@ -81,6 +81,16 @@ object EventStoreBenchmark {
             return
         }
 
+        // Mixed read/write load against a live Vespa: read-only and write-only
+        // baselines, then both at once (see MixedLoadBench). The main corpus is
+        // generated only to SAMPLE the read workload — the store is assumed
+        // already loaded with it (run the full benchmark first, or ingest).
+        if (System.getenv("BENCH_MIXED") != null) {
+            requireNotNull(vespaUrl) { "BENCH_MIXED needs BENCH_VESPA_URL" }
+            MixedLoadBench.run(vespaUrl, NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed)), seed)
+            return
+        }
+
         println("Generating corpus: size=$size authors≈${size / 20} seed=$seed ...")
         val corpus = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed))
         val refCorpus = corpus.take(refSize)
