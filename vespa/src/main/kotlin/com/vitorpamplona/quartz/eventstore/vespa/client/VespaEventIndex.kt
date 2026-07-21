@@ -24,10 +24,12 @@ import ai.vespa.feed.client.FeedClient
 import ai.vespa.feed.client.FeedClientBuilder
 import ai.vespa.feed.client.OperationParameters
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
+import com.vitorpamplona.quartz.eventstore.vespa.mapBounded
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventSelection
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventYql
 import com.vitorpamplona.quartz.eventstore.vespa.query.VespaQuery
+import com.vitorpamplona.quartz.utils.Hex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
@@ -144,12 +146,44 @@ class VespaEventIndex(
     }
 
     override suspend fun search(query: EventQuery): List<EventDoc> {
+        // Pure-id recall bypasses /search/: each id is a direct document-API key
+        // lookup (~35% faster than a search over the id attribute here), which is
+        // what a REQ-by-id and the bulk dedup preload both do. The moment ANY other
+        // constraint is present it falls through to the search stack below. The
+        // expiry filter and newest-first order are applied exactly as YQL would, so
+        // results are identical to the search path.
+        if (query.isPureIdLookup()) return getByIds(query)
         val vq = EventYql.build(query) ?: return emptyList()
         val root = queryRoot(vq, hits = query.limit ?: maxHits) ?: return emptyList()
         return root["children"]
             ?.jsonArray
             ?.mapNotNull { child -> child.jsonObject["fields"]?.jsonObject?.let(::summaryOrNull) }
             ?: emptyList()
+    }
+
+    /**
+     * Only ids constrain the query (an expiry guard may still ride along), and few
+     * enough to resolve in a single concurrent get wave — the direct-lookup fast
+     * path. The size cap matters: above it, ONE `id in (…)` search is a single
+     * round trip while N gets are N, so the bulk-insert dedup preload (500-id
+     * chunks) must stay on the search path or ingest would collapse.
+     */
+    private fun EventQuery.isPureIdLookup(): Boolean =
+        ids.isNotEmpty() && ids.size <= ID_GET_FANOUT &&
+            kinds.isEmpty() && notKinds.isEmpty() && authors.isEmpty() && owners.isEmpty() &&
+            tags.isEmpty() && tagsAll.isEmpty() &&
+            since == null && until == null && expiresBefore == null &&
+            search == null && ranking == null
+
+    /** Resolve [EventQuery.ids] through parallel document-API gets, then filter expiry, order, and cap like the search path. */
+    private suspend fun getByIds(query: EventQuery): List<EventDoc> {
+        val hexes = query.ids.map { it.lowercase() }.filter(Hex::isHex64).distinct()
+        val docs = hexes.mapBounded(ID_GET_FANOUT) { get(it) }.filterNotNull()
+        // NIP-40: never serve an event already expired at the query's cutoff — the
+        // same guard EventYql emits as `expires_at > notExpiredAt`.
+        val live = query.notExpiredAt?.let { cut -> docs.filter { (it.expiresAt() ?: EventDoc.NO_EXPIRATION) > cut } } ?: docs
+        val ordered = live.sortedWith(NEWEST_FIRST)
+        return query.limit?.let(ordered::take) ?: ordered
     }
 
     /**
@@ -371,6 +405,12 @@ class VespaEventIndex(
     private companion object {
         const val NAMESPACE = "event"
         const val DOCTYPE = "event"
+
+        /** Concurrent document-API gets for a pure-id lookup. Gets are light (no summary stage to overrun like big searches), so this floats well above QUERY_FANOUT. */
+        const val ID_GET_FANOUT = 32
+
+        /** Newest first (created_at desc, id asc tiebreak) — the same order the search path and the store apply. */
+        val NEWEST_FIRST = compareByDescending(EventDoc::createdAt).thenBy(EventDoc::id)
 
         /** Docs asked for per visit response (Vespa's per-request ceiling is 1024). */
         const val VISIT_PAGE = 1024

@@ -446,8 +446,11 @@ object MockYql {
         yql: String,
         params: Map<String, String>,
     ): EventQuery {
-        var rest = yql.removePrefix("select * from event where ").trim()
-        require(rest != yql) { "not an event query: $yql" }
+        // Accept any select list (`select *` or the trimmed reconstruction fields
+        // EventYql now emits) — only the WHERE clause carries the query.
+        val marker = " from event where "
+        require(marker in yql) { "not an event query: $yql" }
+        var rest = yql.substringAfter(marker).trim()
 
         var limit: Int? = null
         Regex(""" limit (\d+)$""").find(rest)?.let {
