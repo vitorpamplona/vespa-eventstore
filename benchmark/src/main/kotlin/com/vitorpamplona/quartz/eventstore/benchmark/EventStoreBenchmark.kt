@@ -66,6 +66,21 @@ object EventStoreBenchmark {
         // sections each time (they don't change). Corpus + real Vespa only.
         val vespaOnly = System.getenv("BENCH_VESPA_ONLY") != null
 
+        // Focused insert probe: fresh + duplicate per-event inserts against a live
+        // Vespa, nothing else. For controlled A/Bs of the insert path (run two
+        // code versions back to back against the SAME loaded corpus, giving each
+        // its own BENCH_ID_BAND so "fresh" stays fresh).
+        if (System.getenv("BENCH_INSERT_PROBE") != null) {
+            requireNotNull(vespaUrl) { "BENCH_INSERT_PROBE needs BENCH_VESPA_URL" }
+            InsertProbe.run(
+                url = vespaUrl,
+                band = System.getenv("BENCH_ID_BAND")?.toLongOrNull(16) ?: 0x6L,
+                size = env("BENCH_PROBE_SIZE", 2_000),
+                seed = seed,
+            )
+            return
+        }
+
         println("Generating corpus: size=$size authors≈${size / 20} seed=$seed ...")
         val corpus = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed))
         val refCorpus = corpus.take(refSize)
