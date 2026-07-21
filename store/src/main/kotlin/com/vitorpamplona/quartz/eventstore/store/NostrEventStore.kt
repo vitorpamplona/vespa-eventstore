@@ -312,9 +312,10 @@ class NostrEventStore(
         // would undo the rank profile. Plain filters keep NIP-01 recency.
         val ranked = queries.any { it.search != null || it.ranking != null }
         val ordered = if (ranked) docs else docs.sortedWith(NEWEST_FIRST)
-        // High-volume kinds skip the toEventJson()->fromJson() serialize+parse
-        // round trip (the hot path's biggest allocator); see [toEvent].
-        return ordered.mapNotNull { it.toEvent() } as List<T>
+        // Reconstruct via Quartz's by-kind factory straight from the stored fields,
+        // skipping the toEventJson()->fromJson() serialize+parse round trip that was
+        // the hot path's biggest allocator; see [toEvent].
+        return ordered.map { it.toEvent() } as List<T>
     }
 
     /** Search every query concurrently (bounded), deduped by id — the shared recall for query and multi-filter count. */

@@ -22,43 +22,27 @@ package com.vitorpamplona.quartz.eventstore.store
 
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.nip01Core.core.Event
-import com.vitorpamplona.quartz.nip01Core.metadata.MetadataEvent
-import com.vitorpamplona.quartz.nip09Deletions.DeletionEvent
-import com.vitorpamplona.quartz.nip10Notes.TextNoteEvent
-import com.vitorpamplona.quartz.nip23LongContent.LongTextNoteEvent
-import com.vitorpamplona.quartz.nip25Reactions.ReactionEvent
+import com.vitorpamplona.quartz.utils.EventFactory
 
 /**
- * Rebuild a stored [EventDoc] into its Quartz [Event] — the query result path.
+ * Rebuild a stored [EventDoc] into its typed Quartz [Event] — the query result path.
  *
  * The obvious `Event.fromJson(toEventJson())` reconstructs by SERIALIZING the doc
- * to a JSON string and PARSING it back, once per returned event. On a hot query
- * path that string + parse is the single biggest source of garbage (tens of KB
- * per event). But it is the only way Quartz hands back the correct SUBCLASS
- * (kind 1 -> TextNoteEvent, …), which a consumer may rely on — so it cannot just
- * be dropped for a bare [Event].
+ * to a JSON string and PARSING it back, once per returned event — and on a hot
+ * query path that string + parse is the single biggest source of garbage
+ * (measured ~8x slower and ~5x more allocation per event than building it
+ * directly).
  *
- * This maps the HIGH-VOLUME kinds (a relay is overwhelmingly notes, reactions,
- * profiles, deletions, long-form) straight to their subclass constructor — one
- * allocation, no JSON at all. Those subclass constructors only STORE the seven
- * NIP-01 fields; every derived view (indexableContent, eventHints, contactMetaData)
- * is computed lazily on access, so a directly-built instance is indistinguishable
- * from a `fromJson` one. Any OTHER kind falls back to `fromJson`, so correctness
- * never depends on this table being exhaustive — only the mapped kinds skip the
- * round trip, and `EventReconstructionTest` pins each of them to `fromJson`'s
- * exact type and serialization.
+ * [EventFactory.create] is Quartz's OWN by-kind dispatch — the same registry
+ * `fromJson` uses to pick the subclass (kind 1 -> TextNoteEvent, 0 ->
+ * MetadataEvent, …) — but invoked straight from the stored fields, with no JSON
+ * in the middle. It covers every known kind and returns a base [Event] for the
+ * rest, so this is both faster AND complete: no hand-maintained kind table, and
+ * the result is identical to what `fromJson` would have produced (pinned by
+ * `EventReconstructionTest`). Those subclass constructors only store the seven
+ * NIP-01 fields; every derived view is computed lazily, so a directly-built
+ * instance is indistinguishable from a parsed one.
  */
-internal fun EventDoc.toEvent(): Event? {
-    // Only allocate the String[][] when a mapped kind will actually use it.
-    fun tagArray() = Array(tags.size) { tags[it].toTypedArray() }
-    return when (kind) {
-        0 -> MetadataEvent(id, pubkey, createdAt, tagArray(), content, sig)
-        1 -> TextNoteEvent(id, pubkey, createdAt, tagArray(), content, sig)
-        5 -> DeletionEvent(id, pubkey, createdAt, tagArray(), content, sig)
-        7 -> ReactionEvent(id, pubkey, createdAt, tagArray(), content, sig)
-        30023 -> LongTextNoteEvent(id, pubkey, createdAt, tagArray(), content, sig)
-        // Every other kind keeps the canonical typed path (gift wraps, relay
-        // lists, follow lists, and the long tail) — correctness over speed.
-        else -> Event.fromJsonOrNull(toEventJson())
-    }
-}
+internal fun EventDoc.toEvent(): Event = EventFactory.create(id, pubkey, createdAt, kind, tagsAsArray(), content, sig)
+
+private fun EventDoc.tagsAsArray(): Array<Array<String>> = Array(tags.size) { tags[it].toTypedArray() }

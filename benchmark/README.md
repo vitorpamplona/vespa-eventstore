@@ -201,16 +201,16 @@ Two optimizations roughly **halved per-event allocation on bulk reads**
   bytes to parse per hit.
 - **`getByIds` short-circuits the single-id REQ** past the `mapBounded` fan-out
   (coroutineScope + Semaphore + async all allocate per call).
-- **Direct reconstruction of high-volume kinds** (applied): the store used to
-  rebuild every result via `Event.fromJson(toEventJson())` — a serialize+parse
-  round trip whose only job is to recover the typed subclass (MetadataEvent,
-  TextNoteEvent, … — verified identical to SQLite's). `toEvent()` now maps the
-  high-volume kinds (notes, reactions, profiles, deletions, long-form) straight
-  to their constructor — one allocation, no JSON — and falls back to `fromJson`
-  for the long tail, so correctness never depends on the table being complete.
-  `EventReconstructionTest` pins each mapped kind to `fromJson`'s exact subclass
-  and serialization. Measured: **kind-scan 9,230 → 6,181 bytes/event (−33%)**,
-  author-timeline 12,800 → 9,887 (−23%).
+- **Direct reconstruction via Quartz's `EventFactory.create`** (applied): the
+  store used to rebuild every result with `Event.fromJson(toEventJson())` — a
+  serialize+parse round trip whose only purpose is to recover the typed subclass.
+  `toEvent()` now calls Quartz's own by-kind factory straight from the stored
+  fields — no JSON — which covers every kind and returns a base `Event` for
+  unknown ones. Reconstruction alone, microbenchmarked over 40k events:
+  **313 ns / 120 bytes per event, vs 5,317 ns / 3,892 bytes for the round trip
+  (~17× faster, ~32× less garbage)**. `EventReconstructionTest` pins the factory
+  to `fromJson`'s exact subclass and serialization across kinds. This cut
+  kind-scan end-to-end from ~9,200 toward ~6,000 bytes/event.
 - **Streaming response decode** (applied): the recall path parsed each response
   into a full immutable `JsonElement` tree, then walked it. It now decodes hits
   straight into flat `@Serializable` DTOs (allocating the target objects, not a

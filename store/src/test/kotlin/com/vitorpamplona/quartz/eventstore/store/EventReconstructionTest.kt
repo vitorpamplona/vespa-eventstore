@@ -28,10 +28,10 @@ import kotlin.test.assertEquals
 /**
  * The [toEvent] fast path must be INDISTINGUISHABLE from the canonical
  * `Event.fromJson(toEventJson())` it replaces on the query hot path: for every
- * mapped kind the directly-built event has the SAME runtime subclass AND
- * serializes to the SAME JSON, and every other kind falls back to `fromJson`.
- * If a Quartz upgrade ever remapped a kind, this test fails loudly rather than
- * letting the store hand back a mis-typed event.
+ * kind the factory-built event has the SAME runtime subclass AND serializes to
+ * the SAME JSON as fromJson would. If a Quartz upgrade ever changed the by-kind
+ * dispatch, this fails loudly rather than letting the store hand back a
+ * mis-typed event.
  */
 class EventReconstructionTest {
     private var seq = 0
@@ -52,39 +52,28 @@ class EventReconstructionTest {
         sig = "d".repeat(128),
     )
 
-    /** The kinds [toEvent] builds directly must match fromJson exactly. */
-    private val mappedKinds = listOf(0, 1, 5, 7, 30023)
+    // A broad spread: the corpus kinds, plus follow list / repost / relay list /
+    // gift wrap / zap receipt / addressable app data, plus an UNKNOWN kind to
+    // exercise the base-Event fallback. Every one must match fromJson.
+    private val kinds = listOf(0, 1, 3, 5, 6, 7, 10002, 30023, 1059, 9735, 30078, 987_654)
 
     @Test
-    fun `mapped kinds match fromJson type and serialization exactly`() {
-        for (kind in mappedKinds) {
+    fun `every kind matches fromJson type and serialization exactly`() {
+        for (kind in kinds) {
             val d = doc(kind)
-            val direct = d.toEvent() ?: error("toEvent returned null for kind $kind")
+            val direct = d.toEvent()
             val canonical = Event.fromJson(d.toEventJson())
             assertEquals(canonical::class, direct::class, "kind $kind: subclass diverged from fromJson")
-            assertEquals(d.toEventJson(), direct.toJson(), "kind $kind: fast-path serialization diverged from the canonical form")
-            assertEquals(canonical.toJson(), direct.toJson(), "kind $kind: fast-path JSON diverged from fromJson's")
-        }
-    }
-
-    @Test
-    fun `unmapped kinds fall back to the canonical typed path`() {
-        // Follow list, repost, relay list, gift wrap, zap receipt, addressable app data.
-        for (kind in listOf(3, 6, 10002, 1059, 9735, 30078)) {
-            val d = doc(kind)
-            val direct = d.toEvent() ?: error("toEvent returned null for kind $kind")
-            val canonical = Event.fromJson(d.toEventJson())
-            assertEquals(canonical::class, direct::class, "kind $kind: fallback type diverged")
-            assertEquals(canonical.toJson(), direct.toJson(), "kind $kind: fallback JSON diverged")
+            assertEquals(d.toEventJson(), direct.toJson(), "kind $kind: factory serialization diverged from the canonical form")
+            assertEquals(canonical.toJson(), direct.toJson(), "kind $kind: factory JSON diverged from fromJson's")
         }
     }
 
     @Test
     fun `empty tags and empty content reconstruct correctly`() {
-        for (kind in mappedKinds) {
+        for (kind in kinds) {
             val d = doc(kind, tags = emptyList(), content = "")
-            val direct = d.toEvent() ?: error("null for kind $kind")
-            assertEquals(Event.fromJson(d.toEventJson()).toJson(), direct.toJson(), "kind $kind empty")
+            assertEquals(Event.fromJson(d.toEventJson()).toJson(), d.toEvent().toJson(), "kind $kind empty")
         }
     }
 }
