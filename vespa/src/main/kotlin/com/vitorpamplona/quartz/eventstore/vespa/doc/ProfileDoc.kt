@@ -38,22 +38,22 @@ import kotlinx.serialization.json.putJsonObject
  * rewrites it whole on every change (recompute, not cell surgery), so it can be
  * rebuilt from the event corpus at any time.
  *
- * Tensor cells are keyed by OBSERVER pubkey: [qualityScores] = rank
+ * Tensor cells are keyed by OBSERVER pubkey: [influenceScores] = rank
  * (influence*100, 0..100), [followerCounts] = verified-follower count.
  */
 data class ProfileDoc(
     val pubkey: HexKey,
-    val qualityScores: Map<HexKey, Int> = emptyMap(),
+    val influenceScores: Map<HexKey, Int> = emptyMap(),
     val followerCounts: Map<HexKey, Double> = emptyMap(),
 ) {
     /** No cells at all — the projection removes the doc instead of storing it. */
-    fun isEmpty(): Boolean = qualityScores.isEmpty() && followerCounts.isEmpty()
+    fun isEmpty(): Boolean = influenceScores.isEmpty() && followerCounts.isEmpty()
 
     /** The document's field map (mapped tensors in Vespa's short object form). */
     fun indexFields(): JsonObject =
         buildJsonObject {
             put("pubkey", JsonPrimitive(pubkey))
-            putJsonObject("quality_scores") { qualityScores.forEach { (observer, rank) -> put(observer, JsonPrimitive(rank)) } }
+            putJsonObject("influence_scores") { influenceScores.forEach { (observer, rank) -> put(observer, JsonPrimitive(rank)) } }
             putJsonObject("follower_counts") { followerCounts.forEach { (observer, count) -> put(observer, JsonPrimitive(count)) } }
         }
 
@@ -66,7 +66,7 @@ data class ProfileDoc(
         fun fromSummary(fields: JsonObject): ProfileDoc =
             ProfileDoc(
                 pubkey = fields.getValue("pubkey").jsonPrimitive.content,
-                qualityScores = cells(fields["quality_scores"])?.mapValues { it.value.jsonPrimitive.int } ?: emptyMap(),
+                influenceScores = cells(fields["influence_scores"])?.mapValues { it.value.jsonPrimitive.int } ?: emptyMap(),
                 followerCounts = cells(fields["follower_counts"])?.mapValues { it.value.jsonPrimitive.double } ?: emptyMap(),
             )
 
@@ -82,7 +82,7 @@ data class ProfileDoc(
 data class ProfileCells(
     val subject: String,
     val observer: String,
-    val quality: Int?,
+    val influence: Int?,
     val followers: Double?,
 )
 
@@ -112,7 +112,7 @@ interface ProfileIndex : AutoCloseable {
             val cur = get(u.subject) ?: ProfileDoc(u.subject)
             put(
                 cur.copy(
-                    qualityScores = u.quality?.let { cur.qualityScores + (u.observer to it) } ?: cur.qualityScores,
+                    influenceScores = u.influence?.let { cur.influenceScores + (u.observer to it) } ?: cur.influenceScores,
                     followerCounts = u.followers?.let { cur.followerCounts + (u.observer to it) } ?: cur.followerCounts,
                 ),
             )

@@ -98,7 +98,7 @@ class TrustProjectionTest {
             store.insert(card())
             assertNull(profiles.get(subject), "no provider mapping yet")
             store.insert(list10040())
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.qualityScores)
+            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
         }
 
     @Test
@@ -136,7 +136,7 @@ class TrustProjectionTest {
             store.insert(list10040(author = observer2, serviceKey = service2))
             store.insert(card(signer = service, rank = 87))
             store.insert(card(signer = service2, rank = 15, followers = 3))
-            assertEquals(mapOf(observer to 87, observer2 to 15), profiles.get(subject)?.qualityScores)
+            assertEquals(mapOf(observer to 87, observer2 to 15), profiles.get(subject)?.influenceScores)
             assertEquals(mapOf(observer to 120.0, observer2 to 3.0), profiles.get(subject)?.followerCounts)
         }
 
@@ -146,12 +146,12 @@ class TrustProjectionTest {
             store.insert(list10040(serviceKey = service, at = 100))
             store.insert(card(signer = service, rank = 87))
             store.insert(card(signer = service2, rank = 42))
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.qualityScores)
+            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
 
             // The observer's NEW 10040 picks service2: the superseding insert
             // re-attributes — service's score detaches, service2's attaches.
             store.insert(list10040(serviceKey = service2, at = 200))
-            assertEquals(mapOf(observer to 42), profiles.get(subject)?.qualityScores)
+            assertEquals(mapOf(observer to 42), profiles.get(subject)?.influenceScores)
         }
 
     @Test
@@ -162,7 +162,7 @@ class TrustProjectionTest {
             profiles.docs.clear()
 
             projection.rebuildAll()
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.qualityScores)
+            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
         }
 
     /** The BULK path: one store batch of scores builds every subject's parent doc. */
@@ -175,7 +175,7 @@ class TrustProjectionTest {
             val outcomes = store.batchInsert(batch)
             assertEquals(40, outcomes.count { it is IEventStore.InsertOutcome.Accepted })
             subjects.forEach { s ->
-                assertEquals(mapOf(observer to 10), profiles.docs.getValue(s).qualityScores, "subject ${'$'}s")
+                assertEquals(mapOf(observer to 10), profiles.docs.getValue(s).influenceScores, "subject ${'$'}s")
             }
         }
 
@@ -194,7 +194,7 @@ class TrustProjectionTest {
             val outcomes = store.batchInsert(listOf(card(signer = service, rank = 30), card(signer = service2, rank = 71)))
             assertEquals(2, outcomes.count { it is IEventStore.InsertOutcome.Accepted })
             // Both cards attribute to the ONE observer cell; last applied wins.
-            assertEquals(mapOf(observer to 71), profiles.get(subject)?.qualityScores)
+            assertEquals(mapOf(observer to 71), profiles.get(subject)?.influenceScores)
         }
 
     /** A retraction (rank tag gone) inside a bulk batch supersedes and empties the cell. */
@@ -211,8 +211,8 @@ class TrustProjectionTest {
 
     /**
      * A PARTIAL retraction through the bulk path — rank dropped, followers kept.
-     * The zero-read cell update can't express "clear the quality cell", so this
-     * must fall back to the read-based recompute; otherwise the stale quality
+     * The zero-read cell update can't express "clear the influence cell", so this
+     * must fall back to the read-based recompute; otherwise the stale influence
      * cell survives (the bulk-vs-single divergence the audit caught).
      */
     @Test
@@ -220,11 +220,11 @@ class TrustProjectionTest {
         runBlocking {
             store.insert(list10040())
             store.insert(card(rank = 87, followers = 120, at = 100))
-            assertEquals(mapOf(observer to 87), profiles.get(subject)?.qualityScores)
+            assertEquals(mapOf(observer to 87), profiles.get(subject)?.influenceScores)
             // Newer card keeps followers but drops rank — via the bulk path.
             store.batchInsert(listOf(card(rank = null, followers = 200, at = 200)))
             val doc = profiles.get(subject)
-            assertEquals(emptyMap(), doc?.qualityScores, "the dropped rank must not linger")
+            assertEquals(emptyMap(), doc?.influenceScores, "the dropped rank must not linger")
             assertEquals(mapOf(observer to 200.0), doc?.followerCounts, "followers updated")
         }
 
@@ -259,7 +259,7 @@ class TrustProjectionTest {
 
             assertEquals(sequentialProfiles.docs, bulkProfiles.docs, "bulk cell-updates must match sequential re-derivation")
             // And the values are what we expect, not coincidentally-equal empties.
-            assertEquals(mapOf(observer to 55, observer2 to 9), bulkProfiles.docs.getValue(subject).qualityScores)
+            assertEquals(mapOf(observer to 55, observer2 to 9), bulkProfiles.docs.getValue(subject).influenceScores)
             assertNull(bulkProfiles.docs[subjectB], "subjectB was retracted")
         }
 }

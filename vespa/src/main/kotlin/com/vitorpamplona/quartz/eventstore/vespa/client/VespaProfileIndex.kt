@@ -106,8 +106,8 @@ class VespaProfileIndex(
                 val fields =
                     buildJsonObject {
                         put("pubkey", buildJsonObject { put("assign", u.subject) })
-                        u.quality?.let { q ->
-                            put("quality_scores", buildJsonObject { put("add", buildJsonObject { put("cells", buildJsonObject { put(u.observer, q) }) }) })
+                        u.influence?.let { q ->
+                            put("influence_scores", buildJsonObject { put("add", buildJsonObject { put("cells", buildJsonObject { put(u.observer, q) }) }) })
                         }
                         u.followers?.let { f ->
                             put("follower_counts", buildJsonObject { put("add", buildJsonObject { put("cells", buildJsonObject { put(u.observer, f) }) }) })

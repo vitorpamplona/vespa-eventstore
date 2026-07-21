@@ -23,7 +23,7 @@
 # brainstorm-k8s charts/brainstorm/vespa-app doc.sd (2026-07; operator-
 # provided) — the §12 multiplicative-trust default and all sort alternates —
 # with two mechanical changes: the trust tensors are IMPORTED from the
-# profile parent (author_quality_scores / author_follower_counts) instead of
+# profile parent (author_influence_scores / author_follower_counts) instead of
 # living on the doc, and the generic tier group extends each composite so
 # non-profile kinds ride the same profiles. Query side:
 # brainstorm_server app/core/vespa.py + vespa_query.py.
@@ -178,7 +178,7 @@ schema event {
         }
     }
 
-    import field author_ref.quality_scores as author_quality_scores {}
+    import field author_ref.influence_scores as author_influence_scores {}
     import field author_ref.follower_counts as author_follower_counts {}
 
     # ---- derived trigram views (recall safety-net + tie-breaker) ----
@@ -300,7 +300,7 @@ schema event {
 
         # The observer's trust in this doc's AUTHOR, via the profile parent.
         function user_score() {
-            expression: sum(query(user_q) * attribute(author_quality_scores))
+            expression: sum(query(user_q) * attribute(author_influence_scores))
         }
 
         function verified_followers() {

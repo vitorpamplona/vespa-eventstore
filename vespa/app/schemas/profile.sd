@@ -11,7 +11,7 @@
 # decision to revisit before multi-node.
 #
 # Tensor shapes follow Brainstorm (brainstorm_server app/core/vespa.py):
-#   quality_scores{observer}  = rank (influence*100, 0..100), int8
+#   influence_scores{observer}  = rank (influence*100, 0..100), int8
 #   follower_counts{observer} = verified-follower count, float
 schema profile {
 
@@ -22,7 +22,7 @@ schema profile {
             attribute: fast-search
         }
 
-        field quality_scores type tensor<int8>(user{}) {
+        field influence_scores type tensor<int8>(user{}) {
             indexing: attribute
         }
 

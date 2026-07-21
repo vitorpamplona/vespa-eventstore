@@ -51,7 +51,7 @@ import com.vitorpamplona.quartz.nip85TrustedAssertions.users.ContactCardEvent
  *   subject's 30382s (d = subject) -> signer is a SERVICE key
  *   -> observer = the kind-10040 author whose `30382:rank` entry lists that
  *      service key (NIP-85: cells are keyed by the OBSERVER, never the signer)
- *   -> quality_scores{observer} = rank tag, follower_counts{observer} =
+ *   -> influence_scores{observer} = rank tag, follower_counts{observer} =
  *      followers tag; a version without a rank tag contributes nothing
  *      (the provider retracted the score).
  *
@@ -121,10 +121,10 @@ class TrustProjection(
             val subject = subjectOf(doc) ?: continue
             val observer = serviceToObserver[doc.pubkey] ?: continue
             val card = Event.fromJsonOrNull(doc.toEventJson()) as? ContactCardEvent ?: continue
-            val quality = card.rank()
+            val influence = card.rank()
             val followers = card.followerCount()?.toDouble()
-            if (quality != null && followers != null) {
-                updates += ProfileCells(subject, observer, quality, followers)
+            if (influence != null && followers != null) {
+                updates += ProfileCells(subject, observer, influence, followers)
             } else {
                 // A card MISSING either dimension can't take the zero-read cell
                 // update. updateCells only ADDS cells, so a null dimension would
@@ -225,15 +225,15 @@ class TrustProjection(
         docs: List<EventDoc>,
         serviceToObserver: Map<String, String>,
     ): ProfileDoc {
-        val quality = LinkedHashMap<String, Int>()
+        val influence = LinkedHashMap<String, Int>()
         val followers = LinkedHashMap<String, Double>()
         for (doc in docs) {
             val card = Event.fromJsonOrNull(doc.toEventJson()) as? ContactCardEvent ?: continue
             val observer = serviceToObserver[card.pubKey] ?: continue
-            card.rank()?.let { quality[observer] = it }
+            card.rank()?.let { influence[observer] = it }
             card.followerCount()?.let { followers[observer] = it.toDouble() }
         }
-        return ProfileDoc(subject, quality, followers)
+        return ProfileDoc(subject, influence, followers)
     }
 
     /** service key -> observer (NIP-85 attribution), cached across a pass; see [ProviderMap]. */
