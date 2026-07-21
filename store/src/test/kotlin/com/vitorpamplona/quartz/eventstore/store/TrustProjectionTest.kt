@@ -48,7 +48,7 @@ class TrustProjectionTest {
 
     private val reputations = InMemoryReputationIndex()
     private val projection = TrustProjection(InMemoryEventIndex(), reputations)
-    private val store = VespaEventStore(projection, relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
+    private val store = NostrEventStore(projection, relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
 
     private var t = 1_000_000L
 
@@ -250,11 +250,11 @@ class TrustProjectionTest {
                 )
 
             val sequentialReputations = InMemoryReputationIndex()
-            val sequential = VespaEventStore(TrustProjection(InMemoryEventIndex(), sequentialReputations), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
+            val sequential = NostrEventStore(TrustProjection(InMemoryEventIndex(), sequentialReputations), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
             events.forEach { sequential.insert(it) }
 
             val bulkReputations = InMemoryReputationIndex()
-            val bulk = VespaEventStore(TrustProjection(InMemoryEventIndex(), bulkReputations), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
+            val bulk = NostrEventStore(TrustProjection(InMemoryEventIndex(), bulkReputations), relay = RelayUrlNormalizer.normalize("ws://localhost:7777"))
             bulk.batchInsert(events)
 
             assertEquals(sequentialReputations.docs, bulkReputations.docs, "bulk cell-updates must match sequential re-derivation")

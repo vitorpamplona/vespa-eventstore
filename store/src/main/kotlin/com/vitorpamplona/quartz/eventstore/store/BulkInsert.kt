@@ -54,7 +54,7 @@ internal object Rejections {
 
 /**
  * The bulk insert fast path for one run of plain events (no kind 5/62). It
- * enforces the same Nostr rules as the per-event [VespaEventStore] path, but
+ * enforces the same Nostr rules as the per-event [NostrEventStore] path, but
  * with BATCHED I/O. The per-event path costs 3–5 engine round trips per event,
  * which is useless against a million-event sync. Stages:
  *

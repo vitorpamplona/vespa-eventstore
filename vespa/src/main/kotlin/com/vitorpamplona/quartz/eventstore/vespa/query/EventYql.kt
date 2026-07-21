@@ -203,9 +203,9 @@ object EventYql {
                 .filter { it.isNotEmpty() }
                 .take(MAX_QUERY_WORDS)
         if (words.isNotEmpty()) {
-            clauses += BrainstormWordGroup.clause(words, params)
+            clauses += FuzzyWordGroup.clause(words, params)
             // Short queries lean harder on the trigram safety net.
-            params["ranking.features.query(w_gram)"] = if (BrainstormWordGroup.leansOnGrams(words)) "8.0" else "2.0"
+            params["ranking.features.query(w_gram)"] = if (FuzzyWordGroup.leansOnGrams(words)) "8.0" else "2.0"
         }
         return clauses
     }

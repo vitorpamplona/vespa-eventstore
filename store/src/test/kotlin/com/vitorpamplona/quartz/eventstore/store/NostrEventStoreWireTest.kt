@@ -31,7 +31,7 @@ import kotlin.test.AfterTest
  * [MockVespaEngine], whose YQL parser + in-memory evaluation must reproduce
  * exactly what the in-memory run produced.
  */
-class VespaEventStoreWireTest : VespaEventStoreTest() {
+class NostrEventStoreWireTest : NostrEventStoreTest() {
     private val mock = MockVespaEngine()
 
     override fun newIndex(): EventIndex = VespaEventIndex(mock.url)

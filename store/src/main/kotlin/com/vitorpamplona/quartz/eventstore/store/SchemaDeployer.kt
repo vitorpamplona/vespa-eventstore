@@ -46,7 +46,7 @@ class SchemaDeployer(
 ) {
     /**
      * If no application is already serving at [queryUrl], deploy the bundled
-     * package. This is the "migrate on first run" path [VespaEventStores.open]
+     * package. This is the "migrate on first run" path [VespaEventStore.open]
      * takes: a fresh Vespa gets the schema; one that already serves an app is left
      * untouched (a schema upgrade is an explicit [deploy], not a silent redeploy on
      * every boot).

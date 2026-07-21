@@ -40,10 +40,10 @@ Released to Maven Central. For a commit snapshot, JitPack works too:
 `com.github.vitorpamplona.vespa-eventstore:store:<commit>`.
 
 ```kotlin
-import com.vitorpamplona.quartz.eventstore.store.VespaEventStores
+import com.vitorpamplona.quartz.eventstore.store.VespaEventStore
 
 // Connects, and on a fresh Vespa deploys the bundled schema (autoDeploy, default on).
-VespaEventStores.open("http://localhost:8080").use { store ->
+VespaEventStore.open("http://localhost:8080").use { store ->
 
     // Store anything — signed events OR unsigned rumors. The store never verifies
     // signatures (many Nostr events are rumors); verify at your ingress if you need to.
@@ -89,7 +89,7 @@ Extensions travel inside the `search` string:
   (`VespaEventIndex`), the bundled application package, and testFixtures
   (`InMemoryEventIndex`, `MockVespaEngine`) so you can unit-test with no Vespa running.
 - **`:store`** — Quartz `IEventStore` semantics, the trust projection, and the
-  `VespaEventStores.open` front door.
+  `VespaEventStore.open` front door.
 
 ## Build
 

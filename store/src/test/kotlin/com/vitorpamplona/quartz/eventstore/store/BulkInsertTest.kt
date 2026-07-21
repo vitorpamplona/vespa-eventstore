@@ -82,12 +82,12 @@ class BulkInsertTest {
         batch: List<Event>,
     ) = runBlocking {
         val bulkIndex = InMemoryEventIndex()
-        val bulkStore = VespaEventStore(bulkIndex, relay = relayUrl)
+        val bulkStore = NostrEventStore(bulkIndex, relay = relayUrl)
         prelude.forEach { bulkStore.insert(it) }
         val bulkOutcomes = bulkStore.batchInsert(batch)
 
         val seqIndex = InMemoryEventIndex()
-        val seqStore = VespaEventStore(seqIndex, relay = relayUrl)
+        val seqStore = NostrEventStore(seqIndex, relay = relayUrl)
         prelude.forEach { seqStore.insert(it) }
         val seqOutcomes =
             batch.map { ev ->

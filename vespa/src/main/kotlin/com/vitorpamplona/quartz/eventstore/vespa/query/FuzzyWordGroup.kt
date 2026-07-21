@@ -36,7 +36,7 @@ package com.vitorpamplona.quartz.eventstore.vespa.query
  * inlined, so no escaping is needed. The trigram literals are filtered to
  * alphanumeric characters, which makes them safe to embed.
  */
-internal object BrainstormWordGroup {
+internal object FuzzyWordGroup {
     /** All word groups OR'd into one parenthesized clause, filling [params] with the out-of-band words. */
     fun clause(
         words: List<String>,

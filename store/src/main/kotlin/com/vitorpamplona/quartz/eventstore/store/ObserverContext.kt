@@ -26,7 +26,7 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * Carries the ranking observer from the relay session down to
- * [VespaEventStore]'s queries. The observer is the NIP-42-authenticated pubkey
+ * [NostrEventStore]'s queries. The observer is the NIP-42-authenticated pubkey
  * (or the operator's default) whose web of trust weighs NIP-50 search hits.
  *
  * It is a coroutine-context element because the seam it crosses, Quartz's
