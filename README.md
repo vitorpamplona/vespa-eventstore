@@ -4,53 +4,53 @@ A [Vespa](https://vespa.ai)-backed [Quartz](https://github.com/vitorpamplona/ame
 
 ## Features
 
-- **NIP-01 Storage & Retrieval**:
-  - Stores Nostr events and retrieves using Nostr filters
+- **NIP-01 Storage & Retrieval**
+    - Stores Nostr events and retrieves them using Nostr filters.
 
-- **Replaceable Events**:
-    - Forces unique constraint by kind, pubkey
+- **Replaceable Events**
+    - Enforces a unique constraint by kind and pubkey.
     - Old versions are removed when newer versions arrive.
-    - Old versions are blocked if newer versions exist.
+    - Old versions are blocked if newer versions already exist.
     - Same `created_at`: NIP-01 lexical-id tiebreaker (lowest id wins).
 
-- **Addressable Events**:
-    - Forces unique constraint by kind, pubkey, d-tag
+- **Addressable Events**
+    - Enforces a unique constraint by kind, pubkey, and d-tag.
     - Old versions are removed when newer versions arrive.
-    - Old versions are blocked if newer versions exist.
+    - Old versions are blocked if newer versions already exist.
     - Same `created_at`: NIP-01 lexical-id tiebreaker (lowest id wins).
 
 - **Ephemeral Events**
-    - Ephemeral events never stored.
+    - Ephemeral events are never stored.
 
 - **NIP-40 Expirations**
     - Deletes expired events.
-    - Blocks expired events from being reinserted
+    - Blocks expired events from being re-inserted.
 
 - **NIP-09 Deletion Events**
-    - Deletes by event id
+    - Deletes by event id.
     - Deletes by address up to and including the deletion's `created_at` (newer versions are kept).
     - Blocks deleted events from being re-inserted.
     - Only the original author's deletions take effect; cross-author kind-5s are stored but inert.
-    - GiftWraps are deleted by p-tag
+    - GiftWraps are deleted by p-tag.
 
 - **NIP-62 Right to Vanish**
-    - Deletes all user events until the `created_at`
+    - Deletes all of a user's events up to the request's `created_at`.
     - Blocks vanished events from being re-inserted.
-    - GiftWraps are deleted by p-tag
+    - GiftWraps are deleted by p-tag.
 
-- **NIP-45 Counts**:
-    - Counts records matching Nostr filters
+- **NIP-45 Counts**
+    - Counts records matching Nostr filters.
 
-- **NIP-50 Full Text Search**:
-    - banded BM25 relevance (match-quality tiers, IDF weighting, trigram typo-recall) ranks results
-    - Observer-centric queries by weighting search results by NIP-85 user scores
-    - Indexes updated on replaceables, deletions, vanish and expirations.
+- **NIP-50 Full Text Search**
+    - Banded BM25 relevance (match-quality tiers, IDF weighting, trigram typo-recall) ranks results.
+    - Observer-centric ranking weights results by NIP-85 user scores.
+    - Indexes are updated on replaceables, deletions, vanishes, and expirations.
 
-- **NIP-77: Negentropy**:
-  - Fully sync with other relays out there.
+- **NIP-77 Negentropy**
+    - Exposes negentropy id snapshots so a relay built on the store can reconcile with peers.
 
-- **NIP-91: AND operator for tags**:
-    - Allows queries matching two or more tags at the same time
+- **NIP-91 AND operator for tags**
+    - Matches events carrying two or more required tags at the same time.
 
 ### Search grammar
 
@@ -70,9 +70,10 @@ A search matches on the content and some tags of each event, and different field
 carry different weight: a **primary** field (a title or name) outweighs a
 **secondary** field (a summary, description, or hashtags), which outweighs the
 **body** (the event's `content`). Profiles (kind 0) are split into their own
-name and identity fields. The matches are then ordered by your web of trust.
+name and identity fields. When you supply an observer, the matches are then
+ordered by that observer's web of trust.
 
-The kinds we index and the fields it reads from each (highest weight first):
+The kinds it indexes and the fields it reads from each (highest weight first):
 
 | Kind(s) | What it is | Indexed fields |
 | --- | --- | --- |
@@ -116,7 +117,7 @@ Dozens of other titled kinds (fundraisers, workouts, exercise templates, feeds,
 napplets, interactive stories, …) follow the same shape — a title or name as the
 primary field, the `content` as the body. Any remaining kind Quartz can parse is
 still indexed, by its full text content. The authoritative mapping is
-[`store/…/SearchExtractors.kt`](store/src/main/kotlin/com/vitorpamplona/sot/store/SearchExtractors.kt).
+[`store/…/SearchExtractors.kt`](store/src/main/kotlin/com/vitorpamplona/quartz/eventstore/store/SearchExtractors.kt).
 
 ## Quick start
 
@@ -125,10 +126,14 @@ Vespa is a prerequisite, like a database — stand one up, then point the store 
 ```kotlin
 dependencies {
     implementation("com.vitorpamplona.quartz.eventstore:store:0.1.0")
+
+    // Optional: in-memory test doubles (InMemoryEventIndex, MockVespaEngine),
+    // so your own tests run with no Vespa instance.
+    testImplementation(testFixtures("com.vitorpamplona.quartz.eventstore:vespa:0.1.0"))
 }
 ```
 
-Released to Maven Central.
+Published to Maven Central under the `com.vitorpamplona.quartz.eventstore` group.
 
 ```kotlin
 import com.vitorpamplona.quartz.eventstore.store.VespaEventStore
@@ -185,7 +190,7 @@ Build the library (compile + tests + `spotlessCheck`):
 ./gradlew build
 ```
 
-Fix formatting the linter flags:
+Fix the formatting issues the linter flags:
 ```bash
 ./gradlew spotlessApply
 ```
