@@ -1,0 +1,228 @@
+<meta charset="utf-8">
+<title>SQLite vs embed vs HTTP — throughput vs DB size</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --surface-2: #f4f3ef;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #86847d;
+    --grid: #e4e3df;
+    --series-sqlite: #2a78d6;
+    --series-vespa: #eb6834;
+    font: 14px/1.45 system-ui, -apple-system, sans-serif;
+    background: var(--surface-1);
+    color: var(--text-primary);
+    padding: 26px;
+    max-width: 1120px;
+    margin: 0 auto;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --surface-2: #232322;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8f8e84;
+      --grid: #33322f;
+      --series-sqlite: #3987e5;
+      --series-vespa: #d95926;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e84;
+    --grid: #33322f;
+    --series-sqlite: #3987e5;
+    --series-vespa: #d95926;
+  }
+  :root[data-theme="light"] .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --surface-2: #f4f3ef;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #86847d;
+    --grid: #e4e3df;
+    --series-sqlite: #2a78d6;
+    --series-vespa: #eb6834;
+  }
+  .viz-root * { box-sizing: border-box; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: 11px; font-weight: 600; color: var(--text-muted); margin: 0 0 6px; }
+  h1 { font-size: 21px; margin: 0 0 4px; text-wrap: balance; letter-spacing: -.01em; }
+  .sub { color: var(--text-secondary); margin: 0 0 16px; font-size: 13px; max-width: 68ch; }
+  .legend { display: flex; flex-wrap: wrap; gap: 20px; margin: 0 0 18px; font-size: 12.5px; align-items: center; }
+  .legend b { font-weight: 600; }
+  .legend .k { color: var(--text-secondary); }
+  .swatch { display: inline-block; vertical-align: middle; width: 22px; height: 0; border-top-width: 3px; border-top-style: solid; margin-right: 7px; }
+  .sw-sqlite { border-color: var(--series-sqlite); }
+  .sw-embed { border-color: var(--series-vespa); }
+  .sw-http { border-color: var(--series-vespa); border-top-style: dashed; }
+  .grid-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 20px; }
+  .panel { min-width: 0; background: var(--surface-2); border: 1px solid var(--grid); border-radius: 10px; padding: 14px 14px 8px; }
+  .panel h2 { font-size: 13.5px; margin: 0 0 1px; font-weight: 600; letter-spacing: -.005em; }
+  .panel .note { font-size: 12px; color: var(--text-secondary); margin: 0 0 6px; min-height: 30px; }
+  .panel .win { font-weight: 600; color: var(--text-primary); }
+  svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .ax { font-size: 10px; fill: var(--text-muted); }
+  .gl { stroke: var(--grid); stroke-width: 1; }
+  .tip {
+    position: fixed; pointer-events: none; background: var(--surface-1);
+    border: 1px solid var(--grid); border-radius: 6px; padding: 5px 9px;
+    font-size: 12px; box-shadow: 0 3px 12px rgba(0,0,0,.2); display: none; z-index: 9;
+    color: var(--text-primary); font-variant-numeric: tabular-nums;
+  }
+  table.data { border-collapse: collapse; margin-top: 26px; font-size: 12.5px; width: 100%; font-variant-numeric: tabular-nums; }
+  table.data caption { text-align: left; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+  table.data th, table.data td { border: 1px solid var(--grid); padding: 4px 9px; text-align: right; }
+  table.data th:first-child, table.data td:first-child { text-align: left; }
+  table.data thead th { background: var(--surface-2); font-weight: 600; }
+  table.data tbody th { font-weight: 500; }
+  .scroll { overflow-x: auto; }
+  details { margin-top: 20px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+  details p { color: var(--text-secondary); font-size: 12.5px; max-width: 74ch; }
+  .foot { margin-top: 8px; color: var(--text-muted); font-size: 11.5px; }
+</style>
+
+<div class="viz-root">
+  <p class="eyebrow">Nostr event store · in-container 3-way</p>
+  <h1>Throughput vs database size</h1>
+  <p class="sub">
+    The same store logic answered three ways, all driven <b>in-process from inside Vespa's container JVM</b>
+    (no client hop for any of them), at a <b>fresh Vespa per DB size</b>. Higher is faster; both axes are
+    log-scaled. Six relay query shapes plus batch insert.
+  </p>
+  <div class="legend">
+    <span><i class="swatch sw-sqlite"></i><b>SQLite</b> <span class="k">— Quartz in-memory DB</span></span>
+    <span><i class="swatch sw-embed"></i><b>embed</b> <span class="k">— Vespa store in-process</span></span>
+    <span><i class="swatch sw-http"></i><b>http</b> <span class="k">— Vespa store over loopback</span></span>
+  </div>
+
+  <div class="grid-panels" id="panels"></div>
+
+  <div class="scroll">
+    <table class="data" id="table"></table>
+  </div>
+
+  <details>
+    <summary>How to read it, and what flatters whom</summary>
+    <p>
+      Each point stands up a fresh single-node Vespa holding exactly that many events, so the x-axis is a true
+      DB-size sweep, not accumulation. Numbers are single-thread throughput measured client-wall from inside the
+      container. <b>SQLite in-memory</b> pays no durability and no network — it is the floor for point work and it
+      flatters SQLite at these sizes (it erodes further out). <b>http</b> is loopback to the container's own port,
+      so it omits the network a real remote Vespa would pay — the true remote gap is larger than shown. Trust
+      ranking is excluded on both Vespa stores to isolate DB + store logic + engine transport.
+    </p>
+  </details>
+  <p class="foot" id="foot"></p>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+(function () {
+  const SIZES = [10000, 40000, 100000];
+  const fmt = (v) => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k" : String(v);
+  const PANELS = [
+    { key: "author-timeline", unit: "q/s", win: "embed overtakes SQLite by ≈100k.",
+      note: "SQLite falls ~10× as the DB grows; embed stays flat and crosses it.",
+      sqlite: [1208, 418, 128], embed: [162, 314, 277], http: [118, 196, 172] },
+    { key: "count (kind 7)", unit: "q/s", win: "gap 50× → 15×, still closing.",
+      note: "SQLite's count drops with size; the Vespa stores hold flat.",
+      sqlite: [5935, 3462, 1283], embed: [119, 131, 87], http: [187, 203, 151] },
+    { key: "follow-feed (300 authors)", unit: "q/s", win: "embed ≈22× SQLite, ≈37× http — at every size.",
+      note: "Heavy fan-out: SQLite's 300-way OR collapses; embed answers in-process.",
+      sqlite: [29, 27, 24], embed: [574, 587, 549], http: [14, 16, 15] },
+    { key: "kind-scan (kind 1)", unit: "q/s", win: "embed ≈3× http, flat with size.",
+      note: "Broad scan; SQLite fast, embed steady, http pays JSON per hit.",
+      sqlite: [850, 1320, 1075], embed: [112, 179, 182], http: [64, 61, 74] },
+    { key: "tag-mentions (#p)", unit: "q/s", win: "embed ≈2× http.",
+      note: "SQLite ~15× at this scale; embed holds its transport edge.",
+      sqlite: [5044, 7738, 6816], embed: [404, 479, 470], http: [165, 274, 221] },
+    { key: "id-lookup", unit: "q/s", win: "SQLite ~50× — permanent.",
+      note: "A hash in RAM. Flat ~30k q/s; Vespa never catches a point lookup.",
+      sqlite: [22540, 30975, 30830], embed: [372, 586, 625], http: [399, 599, 690] },
+    { key: "batch insert", unit: "ev/s", win: "embed ~1.5× http; both rise with batch size.",
+      note: "SQLite in-memory leads; embed's DocumentAccess beats loopback feed.",
+      sqlite: [14902, 14812, 14837], embed: [934, 1804, 2346], http: [734, 1242, 1537] },
+  ];
+
+  const W = 300, H = 168, padL = 40, padR = 14, padT = 12, padB = 26;
+  const XMIN = Math.log10(SIZES[0]), XMAX = Math.log10(SIZES[SIZES.length - 1]);
+  const lx = (s) => padL + (Math.log10(s) - XMIN) / (XMAX - XMIN) * (W - padL - padR);
+
+  const tip = document.getElementById("tip");
+  function showTip(e, html) { tip.innerHTML = html; tip.style.display = "block"; tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY - 10) + "px"; }
+  function hideTip() { tip.style.display = "none"; }
+
+  function panel(d) {
+    const all = d.sqlite.concat(d.embed, d.http);
+    // Bracket to exact powers of ten so tick values are clean (no float noise).
+    const emin = Math.floor(Math.log10(Math.min(...all)));
+    const emax = Math.ceil(Math.log10(Math.max(...all)));
+    const ymin = Math.pow(10, emin), ymax = Math.pow(10, emax);
+    const ly = (v) => padT + (Math.log10(ymax) - Math.log10(Math.max(v, ymin))) / (Math.log10(ymax) - Math.log10(ymin)) * (H - padT - padB);
+
+    // y gridlines at each integer power of ten in range
+    let g = "";
+    for (let e = emin; e <= emax; e++) {
+      const yv = Math.pow(10, e), yy = ly(yv);
+      g += `<line class="gl" x1="${padL}" y1="${yy.toFixed(1)}" x2="${W - padR}" y2="${yy.toFixed(1)}"/>`;
+      g += `<text class="ax" x="${padL - 5}" y="${(yy + 3).toFixed(1)}" text-anchor="end">${fmt(yv)}</text>`;
+    }
+    // x ticks
+    SIZES.forEach((s) => {
+      g += `<text class="ax" x="${lx(s).toFixed(1)}" y="${H - padB + 14}" text-anchor="middle">${fmt(s)}</text>`;
+    });
+
+    const series = [["sqlite", d.sqlite, "var(--series-sqlite)", "2.2", "none"],
+                    ["http", d.http, "var(--series-vespa)", "1.8", "5 3"],
+                    ["embed", d.embed, "var(--series-vespa)", "2.6", "none"]];
+    let marks = "";
+    for (const [name, vals, col, sw, dash] of series) {
+      const pts = vals.map((v, i) => `${lx(SIZES[i]).toFixed(1)},${ly(v).toFixed(1)}`).join(" ");
+      marks += `<polyline fill="none" stroke="${col}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round" ${dash === "none" ? "" : `stroke-dasharray="${dash}"`} points="${pts}"/>`;
+      vals.forEach((v, i) => {
+        marks += `<circle cx="${lx(SIZES[i]).toFixed(1)}" cy="${ly(v).toFixed(1)}" r="4.2" fill="${col}" stroke="var(--surface-2)" stroke-width="1.6"
+          data-t="<b>${name}</b> @ ${fmt(SIZES[i])} &middot; <b>${v.toLocaleString()}</b> ${d.unit}" style="cursor:pointer"/>`;
+      });
+    }
+    return `<div class="panel">
+      <h2>${d.key} <span class="ax" style="font-size:11px">(${d.unit})</span></h2>
+      <p class="note">${d.note} <span class="win">${d.win}</span></p>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${d.key} throughput vs database size">${g}${marks}</svg>
+    </div>`;
+  }
+
+  document.getElementById("panels").innerHTML = PANELS.map(panel).join("");
+
+  // hover tooltips
+  document.querySelectorAll("circle[data-t]").forEach((c) => {
+    c.addEventListener("mousemove", (e) => showTip(e, c.getAttribute("data-t")));
+    c.addEventListener("mouseleave", hideTip);
+  });
+
+  // data table
+  let th = `<caption>All numbers — queries/sec (batch insert: events/sec). Fresh Vespa per size.</caption>
+    <thead><tr><th>shape</th><th>store</th>` + SIZES.map((s) => `<th>${fmt(s)}</th>`).join("") + `</tr></thead><tbody>`;
+  for (const d of PANELS) {
+    const rows = [["SQLite", d.sqlite], ["embed", d.embed], ["http", d.http]];
+    rows.forEach(([name, vals], i) => {
+      th += `<tr>${i === 0 ? `<th rowspan="3">${d.key}</th>` : ""}<td style="text-align:left">${name}</td>` +
+        vals.map((v) => `<td>${v.toLocaleString()}</td>`).join("") + `</tr>`;
+    });
+  }
+  th += `</tbody>`;
+  document.getElementById("table").innerHTML = th;
+  document.getElementById("foot").textContent =
+    "Vespa 8.727, single node, single-thread, page-cached. Fresh container per DB size (10k / 40k / 100k events).";
+})();
+</script>
