@@ -33,6 +33,7 @@ import com.vitorpamplona.quartz.eventstore.vespa.query.VespaQuery
 import com.vitorpamplona.quartz.utils.Hex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -48,13 +49,21 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.net.Proxy
 import java.net.URI
 import java.net.URLEncoder
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.time.Duration
-import java.util.concurrent.Executors
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * The real [EventIndex]: Vespa over HTTP. Writes go through Vespa's official
@@ -128,14 +137,24 @@ class VespaEventIndex(
                 },
             ).build()
 
+    // Read client. OkHttp pinned to clear-text HTTP/2 by PRIOR KNOWLEDGE: Vespa's
+    // container serves h2c only via prior knowledge, not the `Upgrade: h2c`
+    // handshake the JDK HttpClient uses — so the JDK client silently ran every
+    // query on HTTP/1.1 (one TCP connection per in-flight read). Prior-knowledge
+    // h2c makes concurrent reads multiplex over a single connection, matching the
+    // feed client's write path. No fallback list: every endpoint here is Vespa.
     private val http =
-        HttpClient
-            .newBuilder()
+        OkHttpClient
+            .Builder()
+            .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
             .connectTimeout(Duration.ofSeconds(5))
+            .readTimeout(Duration.ofSeconds(60))
+            .writeTimeout(Duration.ofSeconds(60))
             // Vespa is local; never route through the egress proxy.
-            .proxy(java.net.ProxySelector.of(null))
-            .executor(Executors.newVirtualThreadPerTaskExecutor())
+            .proxy(Proxy.NO_PROXY)
             .build()
+
+    private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     override suspend fun get(id: String): EventDoc? {
         val resp = send("${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
@@ -384,11 +403,10 @@ class VespaEventIndex(
                 vq.params.forEach { (k, v) -> put(k, v) }
             }.toString()
         val req =
-            HttpRequest
-                .newBuilder(URI.create("${endpoint()}/search/"))
-                .timeout(Duration.ofSeconds(60))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
+            Request
+                .Builder()
+                .url("${endpoint()}/search/")
+                .post(body.toRequestBody(jsonMedia))
                 .build()
         // A busy engine sheds load transiently (504 "Summary data is
         // incomplete" under heavy concurrent summary fills). One failed page
@@ -425,12 +443,12 @@ class VespaEventIndex(
         )
     }
 
-    private suspend fun send(url: String): HttpResponse<String> =
+    private suspend fun send(url: String): HttpResp =
         sendRetrying(
-            HttpRequest
-                .newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(30))
-                .GET()
+            Request
+                .Builder()
+                .url(url)
+                .get()
                 .build(),
         )
 
@@ -441,15 +459,53 @@ class VespaEventIndex(
      * query, get, and visit paths. The full-corpus visit walk is exactly a place
      * where one 504/429 page must not abort the whole scan.
      */
-    private suspend fun sendRetrying(req: HttpRequest): HttpResponse<String> {
-        var resp = http.sendAsync(req, HttpResponse.BodyHandlers.ofString()).await()
+    private suspend fun sendRetrying(req: Request): HttpResp {
+        var resp = http.newCall(req).await()
         var attempt = 0
         while ((resp.statusCode() in 500..599 || resp.statusCode() == 429) && attempt++ < QUERY_RETRIES) {
             delay(500L * attempt)
-            resp = http.sendAsync(req, HttpResponse.BodyHandlers.ofString()).await()
+            resp = http.newCall(req).await()
         }
         return resp
     }
+
+    /** Minimal response holder so the get/search/visit/count call sites keep their JDK-style statusCode()/body() shape. */
+    private class HttpResp(
+        private val code: Int,
+        private val bodyText: String,
+    ) {
+        fun statusCode() = code
+
+        fun body() = bodyText
+    }
+
+    /**
+     * Bridge OkHttp's async [Call.enqueue] to a cancellable suspend. The body is
+     * read on OkHttp's callback thread (inside [Response.use] so the connection is
+     * released), so the whole read stays non-blocking, exactly as the old
+     * `sendAsync(...).await()` did.
+     */
+    private suspend fun Call.await(): HttpResp =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { runCatching { cancel() } }
+            enqueue(
+                object : Callback {
+                    override fun onFailure(
+                        call: Call,
+                        e: IOException,
+                    ) {
+                        if (!cont.isCancelled) cont.resumeWithException(e)
+                    }
+
+                    override fun onResponse(
+                        call: Call,
+                        response: Response,
+                    ) {
+                        response.use { cont.resume(HttpResp(it.code, it.body.string())) }
+                    }
+                },
+            )
+        }
 
     /**
      * One-line feed-client health for status lines: cumulative acks, the LIVE

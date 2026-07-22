@@ -20,6 +20,13 @@ dependencies {
     // Writes go through Vespa's official feed client (async, HTTP/2 multiplexed,
     // retries + throttling built in). Its types stay out of our public API.
     implementation(libs.vespa.feed.client)
+    // Reads use OkHttp with clear-text HTTP/2 (Protocol.H2_PRIOR_KNOWLEDGE): the
+    // JDK HttpClient only negotiates h2 over cleartext via the h2c UPGRADE
+    // handshake, which Vespa's container rejects, so it silently fell back to
+    // HTTP/1.1 (one TCP connection per in-flight query). OkHttp speaks h2c by
+    // prior knowledge — which Vespa accepts — so concurrent reads multiplex over
+    // one connection, the same win the feed client already gets on writes.
+    implementation(libs.okhttp)
     // MockVespaEngine serves HTTP/1.1 + clear-text HTTP/2 (h2c) on one Jetty
     // port: the feed client refuses HTTP/1.1. Pinned to the feed client's Jetty line.
     testFixturesImplementation(libs.kotlinx.serialization.json)
