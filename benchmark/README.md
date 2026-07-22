@@ -64,6 +64,9 @@ docker run --detach --name vespa --publish 8080:8080 --publish 19071:19071 vespa
 Tunables (env): `BENCH_SIZE` (corpus events, default 30000), `BENCH_BATCH`
 (batchInsert chunk, 500), `BENCH_QUERIES` (reps per query shape, 2000),
 `BENCH_REF_SIZE` (cap for the O(n²) in-memory reference, 8000), `BENCH_SEED`.
+Add `BENCH_THROUGHPUT=1` (with `BENCH_CONCURRENCY=1,8,32`) for the concurrent
+table (§3b), and `BENCH_SCALE_CURVE=1` (with `BENCH_CURVE_SIZES=…`) for the
+[scale study](#scale-study-25k--400k).
 
 ## Results
 
@@ -77,15 +80,16 @@ supersede, deletions, and addressable long-form).
 
 | path | reads/event | round-trips/event |
 |---|---|---|
-| `insert()` | 3.26 | **4.29** |
-| `batchInsert()` | 0.04 | **0.05** |
+| `insert()` | 1.30 | **2.34** |
+| `batchInsert()` | 0.05 | **0.05** |
 
-**The bulk path issues ≈89× fewer engine round-trips per event.** The per-event
-path pays, for every event: a dup probe (`get`), a NIP-09 deletion probe
-(`search`), a NIP-62 vanish probe (`search`), and a replaceable/addressable
-supersession probe (`search`) — ~3.3 reads before the write. `batchInsert()`
-reads the whole working set in a handful of chunked queries and pipelines the
-writes, amortizing all of it.
+**The bulk path issues ≈47× fewer engine round-trips per event.** The per-event
+path pays, per event, up to four reads before the write — a dup probe (`get`), a
+NIP-09 deletion probe (`search`), a NIP-62 vanish probe (`search`), and a
+replaceable/addressable supersession probe (`search`) — averaging ~1.3 reads
+across this corpus (most kind-1 notes skip the supersession/guard probes).
+`batchInsert()` reads the whole working set in a handful of chunked queries and
+pipelines the writes, amortizing all of it to ~0.05 round-trips/event.
 
 This is engine-independent, and it dominates real-Vespa ingest (below).
 
@@ -93,46 +97,49 @@ This is engine-independent, and it dominates real-Vespa ingest (below).
 
 | backend | `insert()` | `batchInsert(500)` |
 |---|---:|---:|
-| SQLite (memory) | 5,654 | 6,338 |
-| SQLite (disk) | 4,847 | **32,269** |
-| Real Vespa (1 node) | **39.5** | **635** |
-| Vespa/InMemory ref\* | 1,442 | 11,415 |
+| SQLite (memory) | 14,844 | 18,388 |
+| SQLite (disk) | 9,597 | **36,116** |
+| Real Vespa (1 node) | **109** | **765** |
+| Vespa/InMemory ref\* | 11,213 | 16,534 |
 
-- **On-disk SQLite batching is ~10×** (4.8k → 32k): the transaction amortizes
-  `fsync`. In-memory SQLite barely benefits (no `fsync` to amortize).
-- **Real Vespa: `insert()` = 39.5/s vs `batchInsert()` = 635/s — a 16× wall-clock
-  gap on one node**, exactly the 89× round-trip fan-out showing up as latency
-  (each round-trip is a ~6 ms HTTP hop; 4.29 of them ≈ 25 ms/event). On a real
-  multi-node cluster the feed client pipelines much further, widening the gap.
-  **Rule: never ingest into Vespa via per-event `insert()`; always `batchInsert`.**
+- **On-disk SQLite batching is ~3.8×** (9.6k → 36k): the transaction amortizes
+  `fsync`. In-memory SQLite gains less (~1.2×; no `fsync` to amortize).
+- **Real Vespa: `insert()` = 109/s vs `batchInsert()` = 765/s — a ~7× wall-clock
+  gap on one node**, exactly the round-trip fan-out showing up as latency (each
+  round-trip is a ~4–9 ms HTTP hop; the per-event path's ~2.3 of them ≈ 9 ms/event).
+  On a real multi-node cluster the feed client pipelines much further, widening
+  the gap. **Rule: never ingest into Vespa via per-event `insert()`; always
+  `batchInsert`.**
 
 ### 3. Query throughput (queries/sec; higher is better)
 
 | query | SQLite (mem) | Real Vespa (1 node) |
 |---|---:|---:|
-| id-lookup | **50,145** | 198 |
-| profile (kind 0) | **52,094** | 238 |
-| tag-mentions (`#p`) | **13,568** | 183 |
-| kind-scan (notes, limit 200) | 1,575 | 62 |
-| author-timeline (limit 50) | 519 | 124 |
-| count(reactions) | 4,944 | 199 |
-| NIP-50 search | 46.9 | 46.7 |
+| profile (kind 0) | **48,759** | 391 |
+| tag-mentions (`#p`) | **12,297** | 331 |
+| id-lookup (16 ids) | **6,686** | 98 |
+| count(reactions) | 4,924 | 343 |
+| kind-scan (notes, limit 200) | 1,393 | 83 |
+| author-timeline (limit 50) | 581 | 220 |
+| NIP-50 search | **132** | 68 |
 
-**At 30k events on a single node, SQLite wins nearly everything.** That is
+**At 30k events on a single node, SQLite wins every single-query shape.** That is
 expected and important: SQLite is an in-process embedded DB with no network hop,
-so point lookups are ~50k/s. Single-node Vespa pays a 4–8 ms HTTP round-trip per
-query. **Vespa's value is not single-node small-corpus latency** — it is
-horizontal scale, corpus sizes that exceed SQLite's practical ceiling, and search
-**relevance quality** (trust-ranked BM25, trigram typo-recall), not raw search
-speed. Note the two engines are already **even on NIP-50 search (~47/s)** at this
-scale — and that is the workload the Vespa store exists to do *better*, by
-ranking, once trust data and scale enter the picture.
+so a point read (`profile`) is ~49k/s. Single-node Vespa pays a 4–9 ms HTTP
+round-trip per query, and this box runs Vespa as one container sharing cores with
+the client, so its absolute numbers are conservative. **Vespa's value is not
+single-node small-corpus latency** — it is concurrency (next section),
+horizontal scale, corpus sizes past SQLite's ceiling (the [scale
+study](#scale-study-25k--400k) — author timelines cross ~70k, search ~280k), and
+search **relevance quality** (trust-ranked BM25, trigram typo-recall). At this
+scale the new SQLite FTS5 is even ~2× faster on NIP-50 search — the workload the
+Vespa store exists to do *better* by ranking, once trust data and scale enter.
 
-Practical read: **don't reach for Vespa until you outgrow SQLite.** Below a few
-hundred-k events on one box, Quartz's SQLite store is faster and simpler —
-**except for list-shaped filters (next section), where Vespa already wins.**
+Practical read: **don't reach for Vespa until you outgrow SQLite.** Below a
+hundred-k events on one box, Quartz's SQLite store is faster and simpler; the
+Vespa store earns its keep under **concurrent load** (next) and **at scale**.
 
-### 3b. List-shaped REQs — where Vespa beats SQLite head-on
+### 3b. List-shaped REQs and concurrency — where Vespa's parallelism shows
 
 Every query above uses a single-value filter, but real relay traffic is
 dominated by **list-shaped** REQs: a follow-feed carries the observer's whole
@@ -144,32 +151,33 @@ re-served from cache:
 
 | query (per rep) | SQLite (mem) q/s | Real Vespa (1 node) q/s |
 |---|---:|---:|
-| follow-feed — 300 authors, kinds 1/6/7, limit 500 | 27.9 | **66.8** |
-| contact-sync — 100 authors, kinds 0/3/10002, limit 300 | **161** | 138 |
-| tag-list — `#p` ×100, kinds 1/7, limit 300 | **331** | 101 |
-| ids-set — 100 ids | **1,376** | 182 |
+| follow-feed — 300 authors, kinds 1/6/7, limit 500 | **30.7** | 15.2 |
+| contact-sync — 100 authors, kinds 0/3/10002, limit 300 | **171** | 97 |
+| tag-list — `#p` ×100, kinds 1/7, limit 300 | **127** | 62 |
+| ids-set — 100 ids | **1,330** | 115 |
 
-(4-core box, client and Vespa sharing cores, 30k corpus, seed 42 — same-run
-pairs, so compare across the row, not against the earlier tables.)
+(client and Vespa sharing cores, 30k corpus, seed 42 — same-run pairs, so compare
+across the row, not against the earlier tables. Vespa is a single shared-core
+container here, so single-query latency is its worst case.)
 
-**The follow-feed — THE relay workload, every connected client holds one open —
-is the first shape where this store beats in-process SQLite outright (2.4×) at
-30k events on a single node.** A 300-author `IN` plus a kind list plus
-newest-first is exactly what an inverted index with fast-search attributes is
-built for, while SQLite falls off its point-lookup cliff (52k q/s single-author
-→ 28 q/s at 300 authors, a ~2,000× drop). The id-set and tag-list shapes stay
-with SQLite at this corpus size (no network hop), same as the point lookups.
+**Single-query at 30k, SQLite wins the list shapes too** — no network hop beats
+one HTTP round-trip, even on a 300-author `IN`. But a relay never serves one
+subscription at a time: **every connected client holds a follow-feed open**, and
+that is where Vespa's HTTP/2 parallelism earns its place. Driving the real Vespa
+store from rising client counts (events/sec, Vespa-only, same box):
 
-Under concurrency the follow-feed is the **fastest bulk shape in the whole
-bench** — events/sec at rising client counts (same box, shared cores):
-
-| query (events/query) | conc 1 | conc 32 | conc 128 | bytes/event |
+| query (events/query) | conc 1 | conc 8 | conc 32 | bytes/event |
 |---|---:|---:|---:|---:|
-| follow-feed(a300) (500) | 35,255 | **116,951** | 101,443 | ~5,900 |
-| kind-scan (200) | 26,652 | 90,080 | 89,493 | ~4,700 |
-| ids-set(100) (100) | 18,555 | 67,926 | 70,854 | ~7,900 |
+| follow-feed(a300) (500) | 7,506 | 72,971 | **78,265** | ~5,900 |
+| kind-scan (200) | 16,872 | 60,901 | 62,596 | ~4,600 |
+| ids-set(100) (100) | 13,475 | 47,212 | 47,931 | ~6,900 |
 
-Bulk list reads clear the 50k events/sec target by >2× at concurrency 32.
+The follow-feed goes from 15 q/s single-threaded to **78k events/sec at
+concurrency 32** — clearing the 50k events/sec relay target by >1.5× — because
+each of the 32 in-flight REQs overlaps the others' round-trips over one
+multiplexed HTTP/2 connection. That parallelism, not single-query latency, is
+the read-side case for the Vespa store; SQLite's in-process reads don't overlap
+the same way.
 
 ## Scale study: 30k → 300k (10×) — the crossover starts moving
 
