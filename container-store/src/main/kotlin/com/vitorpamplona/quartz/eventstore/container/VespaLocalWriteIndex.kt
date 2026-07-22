@@ -152,6 +152,25 @@ class VespaLocalWriteIndex(
 
     fun put(doc: EventDoc) = putAll(listOf(doc))
 
+    /** Remove every id, blocking until each is acked — the mirror of [putAll] for deletes. */
+    fun removeAll(ids: List<String>) {
+        acked.set(0)
+        failed.set(0)
+        for (id in ids) {
+            var r = session.remove(DocumentId("id:$NAMESPACE:$DOCTYPE::$id"))
+            while (!r.isSuccess) {
+                parkTenthOfMs()
+                r = session.remove(DocumentId("id:$NAMESPACE:$DOCTYPE::$id"))
+            }
+        }
+        val target = ids.size.toLong()
+        while (acked.get() + failed.get() < target) parkTenthOfMs()
+        val fails = failed.get()
+        require(fails == 0L) { "in-container remove: $fails/${ids.size} operations failed" }
+    }
+
+    fun remove(id: String) = removeAll(listOf(id))
+
     override fun close() = session.destroy()
 
     private fun parkTenthOfMs() =

@@ -24,6 +24,7 @@ import com.vitorpamplona.quartz.eventstore.vespa.client.EventIndex
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventYql
+import com.yahoo.documentapi.DocumentAccess
 import com.yahoo.search.Query
 import com.yahoo.search.result.Hit
 import com.yahoo.search.searchchain.Execution
@@ -32,22 +33,32 @@ import kotlinx.serialization.json.buildJsonObject
 import java.net.URLEncoder
 
 /**
- * An [EventIndex] that runs the store's queries through the jdisc search chain
- * IN-PROCESS ([Execution.search]) instead of over HTTP. It reuses the exact same
- * [EventYql] query builder and [EventDoc.fromSummary] reconstruction as the HTTP
+ * A full read+write [EventIndex] that runs entirely IN-PROCESS: reads go through
+ * the jdisc search chain ([Execution.search]) and writes go onto the content
+ * cluster through the container's own [DocumentAccess] (messagebus), instead of
+ * over HTTP. It reuses the exact same [EventYql] query builder and
+ * [EventDoc.fromSummary]/[EventDoc.indexFields] as the HTTP
  * [com.vitorpamplona.quartz.eventstore.vespa.client.VespaEventIndex], so it
- * answers every NIP-01 filter identically — the only difference is that there is
- * no external hop, no JSON encode, and no client-side parse.
+ * answers every NIP-01 filter identically and lands identical documents — the
+ * only difference is that there is no external hop, no JSON encode/parse.
+ *
+ * Dropped into [com.vitorpamplona.quartz.eventstore.store.NostrEventStore] in
+ * place of the HTTP index, it makes the whole store (dedup, supersession, NIP-09,
+ * search extraction) run against Vespa with no HTTP bridge — the basis of the
+ * real end-to-end insert A/B in [StoreInsertSpikeSearcher].
  *
  * REQUEST-SCOPED: an [Execution] is bound to one in-flight request, so a fresh
- * instance is created per request by the hosting searcher/handler. This is the
- * read half of the "run the store inside Vespa" path; writes stay on the feed
- * client for now (Phase B/2).
+ * instance is created per request by the hosting searcher/handler. Pass a
+ * [DocumentAccess] to enable writes; without one this is a read-only index (the
+ * write methods throw).
  */
 class VespaLocalEventIndex(
     private val execution: Execution,
+    access: DocumentAccess? = null,
     private val maxHits: Int = 10_000,
 ) : EventIndex {
+    private val writer = access?.let { VespaLocalWriteIndex(it) }
+
     override suspend fun search(query: EventQuery): List<EventDoc> {
         val vq = EventYql.build(query) ?: return emptyList()
         val hits = query.limit ?: maxHits
@@ -78,14 +89,20 @@ class VespaLocalEventIndex(
      */
     override suspend fun count(query: EventQuery): Int = search(query.copy(limit = query.limit ?: maxHits)).size
 
-    // ---- write path: Phase B/2 (DocumentProcessor / internal document access) ----
-    override suspend fun put(doc: EventDoc): Unit = unsupportedWrite()
+    // ---- write path: in-process via DocumentAccess (messagebus) ----
+    override suspend fun put(doc: EventDoc) = writer().put(doc)
 
-    override suspend fun remove(id: String): Unit = unsupportedWrite()
+    override suspend fun putAll(docs: List<EventDoc>) = writer().putAll(docs)
 
-    override fun close() {}
+    override suspend fun remove(id: String) = writer().remove(id)
 
-    private fun unsupportedWrite(): Nothing = throw UnsupportedOperationException("VespaLocalEventIndex is read-only (Phase B/1); writes stay on the feed client")
+    override suspend fun removeAll(ids: List<String>) = writer().removeAll(ids)
+
+    override fun close() {
+        writer?.close()
+    }
+
+    private fun writer(): VespaLocalWriteIndex = writer ?: throw UnsupportedOperationException("VespaLocalEventIndex is read-only: construct it with a DocumentAccess to enable writes")
 
     /** Build an [EventDoc] from a hit's summary fields — same fields the HTTP path decodes. */
     private fun toDoc(hit: Hit): EventDoc? {
