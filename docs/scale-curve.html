@@ -61,7 +61,8 @@
 <div class="viz-root">
   <h1>Throughput vs corpus size — Quartz SQLite vs the Vespa store</h1>
   <p class="sub">One prefix-stable corpus delta-ingested into both engines; measured at each checkpoint.
-     Single 4-core box, engines share cores with the client · log–log scales · seed 42 · <code>BENCH_SCALE_CURVE</code> ·
+     Single box, engines share cores with the client and Vespa runs as a single-node container (so its
+     absolute numbers are conservative) · log–log scales · seed 42 · <code>BENCH_SCALE_CURVE</code> ·
      Quartz SQLite <code>72b8df7f6d</code> (FTS-contentless / tag-merge / pooled-statement store).</p>
   <div class="legend"><span class="sq">Quartz SQLite (memory)</span><span class="ve">Vespa store (single node)</span></div>
   <div class="grid-panels" id="panels"></div>
@@ -72,29 +73,29 @@
 const SIZES = [25000, 50000, 100000, 200000, 400000];
 const DATA = {
   "batch ingest (events/sec)": {
-    note: "no crossover ≤400k — new SQLite ingest holds ~9–12k (was ~150k)",
-    sqlite: [11165, 12590, 12181, 10475, 8912],
-    vespa:  [469, 1116, 1301, 1232, 1174],
+    note: "no crossover ≤400k — SQLite ahead 27×→5× as Vespa's feed pipeline fills",
+    sqlite: [16625, 15136, 14071, 12143, 7874],
+    vespa:  [623, 1635, 1638, 1577, 1524],
   },
   "author-timeline (q/s)": {
-    note: "crossover ≈ 60k — SQLite falls ~20×, Vespa holds",
-    sqlite: [450, 275, 81, 44, 22],
-    vespa:  [122, 200, 214, 213, 152],
+    note: "crossover ≈ 70k — SQLite falls 23× (643→28), Vespa holds ~220",
+    sqlite: [643, 318, 152, 62.2, 27.8],
+    vespa:  [175, 266, 257, 220, 224],
   },
   "follow-feed, 300 authors (q/s)": {
-    note: "crossover ≈ 36k — unchanged by the new store",
-    sqlite: [36.0, 31.7, 25.2, 18.4, 15.5],
-    vespa:  [28.3, 39.1, 41.0, 40.2, 35.9],
+    note: "SQLite declines 48→23, Vespa flat ~15; gap narrows, no crossover ≤400k",
+    sqlite: [48.5, 42.4, 34.8, 26.0, 22.6],
+    vespa:  [14.4, 14.9, 14.8, 13.3, 14.9],
   },
   "NIP-50 search (q/s)": {
-    note: "crossover ≈ 260k — new FTS5 ~2× faster (was ≈40k)",
-    sqlite: [114.1, 55.5, 29.5, 15.5, 7.0],
-    vespa:  [30.4, 36.6, 25.3, 14.0, 8.3],
+    note: "crossover ≈ 280k — SQLite FTS5 decays 119→9.5, Vespa flattens and overtakes",
+    sqlite: [119, 78.4, 40.0, 18.9, 9.5],
+    vespa:  [32.1, 50.5, 31.5, 11.2, 11.8],
   },
   "id-lookup (q/s)": {
-    note: "no crossover — in-process point reads stay ~60× ahead",
-    sqlite: [25160, 35393, 24761, 32315, 29643],
-    vespa:  [365, 424, 517, 371, 477],
+    note: "no crossover — in-process point reads stay ~50–100× ahead (no network hop)",
+    sqlite: [18876, 50011, 48751, 39790, 32700],
+    vespa:  [532, 599, 614, 235, 425],
   },
 };
 const W = 340, H = 220, M = {t: 8, r: 12, b: 26, l: 46};
