@@ -31,6 +31,7 @@ import com.vitorpamplona.quartz.eventstore.vespa.doc.ReputationDoc
 import com.vitorpamplona.quartz.eventstore.vespa.mapBounded
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
 import com.vitorpamplona.quartz.nip01Core.core.Event
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.nip85TrustedAssertions.list.TrustProviderListEvent
 import com.vitorpamplona.quartz.nip85TrustedAssertions.users.ContactCardEvent
 
@@ -71,6 +72,11 @@ class TrustProjection(
     override suspend fun get(id: String): EventDoc? = inner.get(id)
 
     override suspend fun search(query: EventQuery): List<EventDoc> = inner.search(query)
+
+    // MUST delegate, not ride the interface default: the default would call this
+    // decorator's search() (parsed EventDocs) and lose the inner client's raw
+    // passthrough — the whole point of the raw path (see EventIndex.rawSearch).
+    override suspend fun rawSearch(query: EventQuery): List<RawEvent> = inner.rawSearch(query)
 
     override suspend fun visitIds(
         query: EventQuery,

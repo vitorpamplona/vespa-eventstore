@@ -46,3 +46,13 @@ application {
 tasks.named<JavaExec>("run") {
     maxHeapSize = System.getenv("BENCH_HEAP") ?: "2g"
 }
+
+// The raw-passthrough A/B (query+serialize vs rawQuery+splice) against a real
+// Vespa already running at VESPA_URL (default localhost:8080). See RawPassthroughAb.
+tasks.register<JavaExec>("rawAb") {
+    group = "verification"
+    description = "Raw-passthrough read-path A/B against a running Vespa (VESPA_URL)"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.vitorpamplona.quartz.eventstore.benchmark.RawPassthroughAb")
+    maxHeapSize = System.getenv("BENCH_HEAP") ?: "2g"
+}
