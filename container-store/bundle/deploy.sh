@@ -9,15 +9,21 @@ tmp="$(mktemp -d)"; cp -r "$app"/. "$tmp/"
 mkdir -p "$tmp/components"; cp "$here/containerstore.jar" "$tmp/components/"
 python3 - "$tmp/services.xml" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
+pkg="com.vitorpamplona.quartz.eventstore.container"
+# The spike searchers live in their own `local` chain (a failed searcher fails
+# the whole component graph, so we keep them off the default chain).
 s=s.replace("<search />",
  '<search>\n      <chain id="local" inherits="vespa">\n'
- '        <searcher id="com.vitorpamplona.quartz.eventstore.container.LocalStoreSearcher" '
- 'bundle="containerstore" />\n'
- '        <searcher id="com.vitorpamplona.quartz.eventstore.container.InsertSpikeSearcher" '
- 'bundle="containerstore" />\n'
- '        <searcher id="com.vitorpamplona.quartz.eventstore.container.StoreInsertSpikeSearcher" '
- 'bundle="containerstore" />\n'
- '      </chain>\n    </search>')
+ f'        <searcher id="{pkg}.LocalStoreSearcher" bundle="containerstore" />\n'
+ f'        <searcher id="{pkg}.InsertSpikeSearcher" bundle="containerstore" />\n'
+ f'        <searcher id="{pkg}.StoreInsertSpikeSearcher" bundle="containerstore" />\n'
+ '      </chain>\n    </search>\n'
+ # The embedded store's front door is a HANDLER, not a searcher: it injects
+ # ExecutionFactory (which depends on the searcher registry — a searcher that
+ # injected it would form a component-graph cycle).
+ f'    <handler id="{pkg}.EmbeddedStoreHandler" bundle="containerstore">\n'
+ '      <binding>http://*/embedded-store*</binding>\n'
+ '    </handler>')
 open(p,"w").write(s)
 PY
 (cd "$tmp" && zip -rq /tmp/containerstore-app.zip .)

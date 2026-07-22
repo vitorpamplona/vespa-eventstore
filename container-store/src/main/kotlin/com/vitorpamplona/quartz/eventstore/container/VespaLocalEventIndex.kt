@@ -20,6 +20,7 @@
  */
 package com.vitorpamplona.quartz.eventstore.container
 
+import com.vitorpamplona.quartz.eventstore.vespa.client.DocRef
 import com.vitorpamplona.quartz.eventstore.vespa.client.EventIndex
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
@@ -33,28 +34,33 @@ import kotlinx.serialization.json.buildJsonObject
 import java.net.URLEncoder
 
 /**
- * A full read+write [EventIndex] that runs entirely IN-PROCESS: reads go through
- * the jdisc search chain ([Execution.search]) and writes go onto the content
- * cluster through the container's own [DocumentAccess] (messagebus), instead of
- * over HTTP. It reuses the exact same [EventYql] query builder and
- * [EventDoc.fromSummary]/[EventDoc.indexFields] as the HTTP
+ * A composite [EventIndex] for running the store INSIDE Vespa's container. The
+ * HOT paths go in-process — reads through the jdisc search chain
+ * ([Execution.search]) and writes onto the content cluster through the container's
+ * own [DocumentAccess] (messagebus) — reusing the exact same [EventYql] builder
+ * and [EventDoc.fromSummary]/[EventDoc.indexFields] as the HTTP
  * [com.vitorpamplona.quartz.eventstore.vespa.client.VespaEventIndex], so it
- * answers every NIP-01 filter identically and lands identical documents — the
- * only difference is that there is no external hop, no JSON encode/parse.
+ * answers every NIP-01 filter identically and lands identical documents, with no
+ * external hop and no JSON encode/parse. Those are the paths the in-container A/Bs
+ * measured (reads ~2.3–3.4×, ingest ~1.8–2.1×).
  *
- * Dropped into [com.vitorpamplona.quartz.eventstore.store.NostrEventStore] in
- * place of the HTTP index, it makes the whole store (dedup, supersession, NIP-09,
- * search extraction) run against Vespa with no HTTP bridge — the basis of the
- * real end-to-end insert A/B in [StoreInsertSpikeSearcher].
+ * The COLD paths — grouping [count]/[countDistinctAuthors]/[countByKind] and the
+ * full-corpus [visitIds] scan — are rare (status metrics, negentropy sync) and
+ * their result-parsing is non-trivial, so instead of re-porting them this
+ * delegates to an inner [cold] index (a loopback [VespaEventIndex]). Reusing the
+ * tested HTTP implementation verbatim is worth one localhost round-trip on a call
+ * that happens seldom. Without a [cold] delegate these fall back to the interface
+ * defaults (capped-search) — fine for the parity battery, not for large corpora.
  *
- * REQUEST-SCOPED: an [Execution] is bound to one in-flight request, so a fresh
- * instance is created per request by the hosting searcher/handler. Pass a
- * [DocumentAccess] to enable writes; without one this is a read-only index (the
- * write methods throw).
+ * LONG-LIVED: reads pull a fresh [Execution] from [executionSource] per call
+ * (e.g. `executionFactory::newExecution` bound to the backend chain), so one
+ * instance can back a long-lived embedded store rather than a single request.
+ * Pass a [DocumentAccess] to enable writes; without one the write methods throw.
  */
 class VespaLocalEventIndex(
-    private val execution: Execution,
+    private val executionSource: () -> Execution,
     access: DocumentAccess? = null,
+    private val cold: EventIndex? = null,
     private val maxHits: Int = 10_000,
 ) : EventIndex {
     private val writer = access?.let { VespaLocalWriteIndex(it) }
@@ -74,20 +80,33 @@ class VespaLocalEventIndex(
         }
 
         val sub = Query(req.toString())
-        val result = execution.search(sub)
-        execution.fill(result)
+        val exec = executionSource()
+        val result = exec.search(sub)
+        exec.fill(result)
         return result.hits().asList().mapNotNull { toDoc(it) }
     }
 
     override suspend fun get(id: String): EventDoc? = search(EventQuery(ids = listOf(id), limit = 1)).firstOrNull()
 
-    /**
-     * Exact recall count. The grouping `count()` path the HTTP store uses isn't
-     * ported yet, so this counts the (capped) recall set — exact whenever the match
-     * set fits under [maxHits], which covers the NIP-01 parity battery. TODO Phase
-     * B/2: port [EventYql.buildCount] grouping for unbounded exact counts.
-     */
-    override suspend fun count(query: EventQuery): Int = search(query.copy(limit = query.limit ?: maxHits)).size
+    // ---- cold paths: grouping counts + the full-corpus visit ----
+    // Delegated to the loopback [cold] index (the tested HTTP grouping/visit) when
+    // present; otherwise the capped-search interface defaults. See the class kdoc.
+
+    override suspend fun count(query: EventQuery): Int = cold?.count(query) ?: search(query.copy(limit = query.limit ?: maxHits)).size
+
+    override suspend fun countDistinctAuthors(query: EventQuery): Int = cold?.countDistinctAuthors(query) ?: super.countDistinctAuthors(query)
+
+    override suspend fun countByKind(query: EventQuery): Map<Int, Int> = cold?.countByKind(query) ?: super.countByKind(query)
+
+    override suspend fun distinctAuthors(query: EventQuery): Set<String> = cold?.distinctAuthors(query) ?: super.distinctAuthors(query)
+
+    override suspend fun visitIds(
+        query: EventQuery,
+        withDTag: Boolean,
+        onPage: suspend (List<DocRef>) -> Boolean,
+    ) {
+        if (cold != null) cold.visitIds(query, withDTag, onPage) else super.visitIds(query, withDTag, onPage)
+    }
 
     // ---- write path: in-process via DocumentAccess (messagebus) ----
     override suspend fun put(doc: EventDoc) = writer().put(doc)
@@ -100,6 +119,7 @@ class VespaLocalEventIndex(
 
     override fun close() {
         writer?.close()
+        cold?.close()
     }
 
     private fun writer(): VespaLocalWriteIndex = writer ?: throw UnsupportedOperationException("VespaLocalEventIndex is read-only: construct it with a DocumentAccess to enable writes")

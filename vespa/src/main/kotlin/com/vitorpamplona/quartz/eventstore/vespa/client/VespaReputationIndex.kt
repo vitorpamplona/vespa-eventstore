@@ -60,7 +60,11 @@ class VespaReputationIndex(
             .newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .proxy(java.net.ProxySelector.of(null))
-            .executor(Executors.newVirtualThreadPerTaskExecutor())
+            // A daemon cached pool, not `newVirtualThreadPerTaskExecutor()`: that
+            // method is Java 21+, and this module also runs in Vespa's Java-17 jdisc
+            // container (the in-container store). Reputation is a cold path, so a
+            // cached pool is more than enough.
+            .executor(Executors.newCachedThreadPool { r -> Thread(r, "vespa-reputation-http").also { it.isDaemon = true } })
             .build()
 
     override suspend fun get(pubkey: String): ReputationDoc? {

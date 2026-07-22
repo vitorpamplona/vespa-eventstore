@@ -25,12 +25,14 @@ import com.vitorpamplona.quartz.eventstore.vespa.client.VespaEventIndex
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.store.IEventStore
 import com.yahoo.component.annotation.Inject
+import com.yahoo.component.chain.dependencies.Before
 import com.yahoo.documentapi.DocumentAccess
 import com.yahoo.search.Query
 import com.yahoo.search.Result
 import com.yahoo.search.Searcher
 import com.yahoo.search.result.Hit
 import com.yahoo.search.searchchain.Execution
+import com.yahoo.search.searchchain.PhaseNames
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -59,6 +61,7 @@ import kotlinx.coroutines.runBlocking
  * `?storeinsert=1&n=N&rounds=R&run=K` — bump `run` to get fresh id/author bands
  * across invocations (avoids dedup against a prior run's writes).
  */
+@Before(PhaseNames.TRANSFORMED_QUERY)
 class StoreInsertSpikeSearcher
     @Inject
     constructor(
@@ -74,7 +77,7 @@ class StoreInsertSpikeSearcher
             val rounds = (query.properties().getString("rounds")?.toIntOrNull() ?: 5).coerceIn(1, 12)
             val run = query.properties().getString("run")?.toIntOrNull() ?: 1
 
-            val localStore = NostrEventStore(VespaLocalEventIndex(execution, access))
+            val localStore = NostrEventStore(VespaLocalEventIndex({ execution }, access))
             val httpStore = NostrEventStore(VespaEventIndex(baseUrl = "http://localhost:8080"))
 
             runBlocking {

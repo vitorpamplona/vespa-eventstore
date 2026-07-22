@@ -23,12 +23,14 @@ package com.vitorpamplona.quartz.eventstore.container
 import com.vitorpamplona.quartz.eventstore.vespa.client.VespaEventIndex
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.yahoo.component.annotation.Inject
+import com.yahoo.component.chain.dependencies.Before
 import com.yahoo.documentapi.DocumentAccess
 import com.yahoo.search.Query
 import com.yahoo.search.Result
 import com.yahoo.search.Searcher
 import com.yahoo.search.result.Hit
 import com.yahoo.search.searchchain.Execution
+import com.yahoo.search.searchchain.PhaseNames
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -47,6 +49,7 @@ import kotlinx.coroutines.runBlocking
  *
  * [DocumentAccess] is injected by the container (requires `<document-api/>`).
  */
+@Before(PhaseNames.TRANSFORMED_QUERY)
 class InsertSpikeSearcher
     @Inject
     constructor(

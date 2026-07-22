@@ -56,7 +56,7 @@ class LocalStoreSearcher : Searcher() {
 
         val reps = query.properties().getString("reps")?.toIntOrNull() ?: 100
         val eq = buildQuery(query)
-        val local = VespaLocalEventIndex(execution)
+        val local = VespaLocalEventIndex({ execution })
 
         var localIds: List<String> = emptyList()
         var httpIds: List<String> = emptyList()
