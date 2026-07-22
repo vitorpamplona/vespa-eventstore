@@ -55,7 +55,13 @@ class EmbeddedStoreHandler
         executionFactory: ExecutionFactory,
         documentAccess: DocumentAccess,
     ) : ThreadedHttpRequestHandler(executor) {
-        private val store = EmbeddedEventStore.open(executionFactory, documentAccess)
+        // LAZY, not eager: EmbeddedEventStore.open() connects its loopback client to
+        // :8080, but this handler is constructed while the container is still coming
+        // up (before :8080 serves). Opening on the first request — when the container
+        // is demonstrably serving — avoids a boot-time "connection refused" that would
+        // fail the whole component graph. A handler must not do I/O in its constructor.
+        private val storeLazy = lazy { EmbeddedEventStore.open(executionFactory, documentAccess) }
+        private val store get() = storeLazy.value
 
         override fun handle(request: HttpRequest): HttpResponse {
             val n = request.getProperty("n")?.toIntOrNull() ?: 200
@@ -113,7 +119,8 @@ class EmbeddedStoreHandler
         }
 
         override fun destroy() {
-            runCatching { store.close() }
+            // Only close if a request actually opened the store — don't force-open it.
+            if (storeLazy.isInitialized()) runCatching { store.close() }
             super.destroy()
         }
     }

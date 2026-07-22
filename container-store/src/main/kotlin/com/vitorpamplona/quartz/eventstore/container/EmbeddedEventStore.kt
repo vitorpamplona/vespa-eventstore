@@ -56,6 +56,12 @@ import com.yahoo.search.searchchain.ExecutionFactory
  * This is the library seam. It deliberately does NOT open a socket or speak the
  * Nostr wire protocol; terminating client connections (WebSocket REQ/EVENT/CLOSE)
  * is the consumer's front door to build on top.
+ *
+ * CONNECTS EAGERLY: [open] builds a loopback client that handshakes the local
+ * container on construction. The container isn't serving during its own startup,
+ * so a host must NOT call [open] from its constructor — open it lazily, on the
+ * first request (see [EmbeddedStoreHandler]). Otherwise the boot-time connection
+ * is refused and the component graph fails.
  */
 object EmbeddedEventStore {
     /**

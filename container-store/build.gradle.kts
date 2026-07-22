@@ -15,6 +15,13 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     // Vespa container component APIs — PROVIDED by the jdisc container at runtime.
     compileOnly(libs.vespa.container.dev)
+
+    // Integration test: stand up a real Vespa, deploy THIS bundle, assert the
+    // in-container store answers correctly. Reuses :vespa's bundled app package
+    // (vespa-app.zip) off the classpath.
+    testImplementation(kotlin("test"))
+    testImplementation(libs.kotlinx.coroutines)
+    testImplementation(libs.testcontainers)
 }
 
 kotlin {
@@ -63,4 +70,13 @@ val containerBundle by tasks.registering(Jar::class) {
         val jars = listOf(ownJar.get().asFile) + configurations.getByName("runtimeClasspath").files
         manifest.attributes["Bundle-ClassPath"] = (listOf(".") + jars.map { "dependencies/${it.name}" }).joinToString(",")
     }
+}
+
+// The IT deploys the freshly-built bundle, so it depends on it and gets its path.
+tasks.test {
+    useJUnitPlatform()
+    dependsOn(containerBundle)
+    val bundleJar = containerBundle.flatMap { it.archiveFile }
+    inputs.file(bundleJar)
+    doFirst { systemProperty("containerstore.bundle.jar", bundleJar.get().asFile.absolutePath) }
 }
