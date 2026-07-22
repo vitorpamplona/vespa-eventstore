@@ -29,6 +29,9 @@ s=s.replace("<search />",
  '    </handler>\n'
  f'    <handler id="{pkg}.NostrRelayHandler" bundle="containerstore">\n'
  '      <binding>http://*/nostr*</binding>\n'
+ '    </handler>\n'
+ f'    <handler id="{pkg}.Bench3Handler" bundle="containerstore">\n'
+ '      <binding>http://*/bench3*</binding>\n'
  '    </handler>')
 open(p,"w").write(s)
 PY
