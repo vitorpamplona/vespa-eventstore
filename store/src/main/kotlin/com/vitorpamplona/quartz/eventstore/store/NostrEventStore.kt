@@ -37,6 +37,7 @@ import com.vitorpamplona.quartz.nip01Core.relay.normalizer.NormalizedRelayUrl
 import com.vitorpamplona.quartz.nip01Core.store.FtsReindexProgress
 import com.vitorpamplona.quartz.nip01Core.store.IEventStore
 import com.vitorpamplona.quartz.nip01Core.store.IdAndTime
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.nip01Core.tags.dTag.dTag
 import com.vitorpamplona.quartz.nip09Deletions.DeletionEvent
 import com.vitorpamplona.quartz.nip40Expiration.isExpired
@@ -344,6 +345,32 @@ class NostrEventStore(
             else -> queries.mapBounded(QUERY_FANOUT) { index.search(it) }.flatten().distinctBy { it.id }
         }
 
+    /**
+     * Raw read path: recall matches as Quartz [RawEvent]s, skipping the per-hit
+     * tag parse and the Event object model that [query] builds. A relay serving
+     * REQs straight to the wire never needs the parsed tags — it re-serializes
+     * each event to JSON — so on the Vespa client this hands the stored tag
+     * string through untouched (see [EventIndex.rawSearch]). Same recall, expiry,
+     * dedup, and ordering as [query]; only the projection differs.
+     */
+    override suspend fun rawQuery(
+        filters: List<Filter>,
+        onEach: (RawEvent) -> Unit,
+    ) {
+        val observer = coroutineContext[ObserverContext]?.pubkey
+        val queries = restoreSearches(filters).mapNotNull { it.toExpiryQuery(observer) }
+        val raw =
+            when (queries.size) {
+                0 -> return
+                1 -> index.rawSearch(queries[0])
+                else -> queries.mapBounded(QUERY_FANOUT) { index.rawSearch(it) }.flatten().distinctBy { it.id }
+            }
+        // NIP-50 relevance order is preserved for searching queries, exactly as in [query].
+        val ranked = queries.any { it.search != null || it.ranking != null }
+        val ordered = if (ranked) raw else raw.sortedWith(RAW_NEWEST_FIRST)
+        ordered.forEach(onEach)
+    }
+
     override suspend fun <T : Event> query(
         filter: Filter,
         onEach: (T) -> Unit,
@@ -640,5 +667,8 @@ class NostrEventStore(
         // Ids/authors/d-tags per preload query — well under the engine's page cap.
         const val PRELOAD_CHUNK = 500
         val NEWEST_FIRST = compareByDescending(EventDoc::createdAt).thenBy(EventDoc::id)
+
+        /** [NEWEST_FIRST] for the raw read path — the same created_at desc, id asc order over [RawEvent]s. */
+        val RAW_NEWEST_FIRST = compareByDescending(RawEvent::createdAt).thenBy(RawEvent::id)
     }
 }

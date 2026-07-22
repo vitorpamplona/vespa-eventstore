@@ -22,6 +22,7 @@ package com.vitorpamplona.quartz.eventstore.vespa.doc
 import com.vitorpamplona.quartz.eventstore.vespa.isSingleLetterTagName
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.nip01Core.tags.dTag.dTag
 import com.vitorpamplona.quartz.nip40Expiration.expiration
 import kotlinx.serialization.json.Json
@@ -116,6 +117,15 @@ data class EventDoc(
 
     /** The complete NIP-01 event JSON, rebuilt from the exact stored values via Quartz's canonical serializer. */
     fun toEventJson(): String = Event(id, pubkey, createdAt, kind, tagsArray(), content, sig).toJson()
+
+    /**
+     * This doc as a Quartz [RawEvent]: the wire event with `tags` kept as its
+     * canonical JSON string. A raw recall path hands this straight to a relay's
+     * serializer (which splices `jsonTags` verbatim), so no per-tag object is
+     * ever built or re-serialized. The Vespa client overrides its recall to build
+     * the RawEvent from the decoded summary directly, skipping even this EventDoc.
+     */
+    fun toRawEvent(): RawEvent = RawEvent(id, pubkey, createdAt, kind, tagsAsJson().toString(), content, sig)
 
     private fun tagsAsJson(): JsonArray = JsonArray(tags.map { tag -> JsonArray(tag.map(::JsonPrimitive)) })
 

@@ -30,6 +30,7 @@ import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventSelection
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventYql
 import com.vitorpamplona.quartz.eventstore.vespa.query.VespaQuery
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.utils.Hex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
@@ -207,6 +208,23 @@ class VespaEventIndex(
             .decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
             .root.children
             .mapNotNull { it.fields?.toDoc() }
+    }
+
+    /**
+     * Raw recall: decode each hit straight to a [RawEvent], keeping `tags` as the
+     * stored JSON string. This skips the one field [toDoc] still parses per hit
+     * AND the EventDoc/Event object model — the relay read path splices that tag
+     * string straight onto the wire, so parsing then re-serializing it is pure
+     * waste that scales with result size. The pure-id fast path has no summary to
+     * decode (it gets documents), so it reuses [getByIds] and projects the docs.
+     */
+    override suspend fun rawSearch(query: EventQuery): List<RawEvent> {
+        if (query.isPureIdLookup()) return getByIds(query).map { it.toRawEvent() }
+        val vq = EventYql.build(query) ?: return emptyList()
+        return DECODER
+            .decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
+            .root.children
+            .mapNotNull { it.fields?.toRaw() }
     }
 
     /**
@@ -441,6 +459,17 @@ class VespaEventIndex(
             owner = owner ?: pubkey,
             search = SearchFields(name, displayName, about, nip05, lud16, website, primary, secondary, text, location),
         )
+    }
+
+    /**
+     * The summary as a [RawEvent] with NO tag parse: `tags` rides through as the
+     * exact JSON string Vespa stored (`[["p","…"],…]`), which is precisely what a
+     * relay's serializer splices after `"tags":`. This is the whole raw-recall
+     * win — the tag column is never turned into per-tag objects and back.
+     */
+    private fun VespaSummary.toRaw(): RawEvent? {
+        if (id.isEmpty()) return null
+        return RawEvent(id, pubkey, createdAt, kind, tags, content, sig)
     }
 
     private suspend fun send(url: String): HttpResp =

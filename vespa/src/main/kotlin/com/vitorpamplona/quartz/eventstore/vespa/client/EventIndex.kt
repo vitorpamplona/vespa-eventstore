@@ -21,6 +21,7 @@
 package com.vitorpamplona.quartz.eventstore.vespa.client
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 
 /**
  * The engine port an event store talks to: document-keyed get/put/remove plus
@@ -53,6 +54,21 @@ interface EventIndex : AutoCloseable {
 
     /** Docs matching [query]: newest first (`created_at` desc, id asc tiebreak) unless ranked by a search term. */
     suspend fun search(query: EventQuery): List<EventDoc>
+
+    /**
+     * The same recall as [search], but each match projected to a Quartz
+     * [RawEvent] — the wire event with `tags` kept as its canonical JSON string.
+     * This is the read path a relay serves straight to a client: it never needs
+     * the per-tag object model [EventDoc] carries, so a raw path can hand each
+     * hit's `tags` through verbatim rather than parse-then-re-serialize it.
+     *
+     * The default rides [search] and re-serializes each doc's tags, which keeps
+     * the in-memory reference correct. The real Vespa client overrides it to
+     * build the [RawEvent] from the decoded summary directly, so a hit's tag
+     * string is decoded once off the wire and passed straight through — no
+     * [EventDoc], no tag parse. Ordering matches [search].
+     */
+    suspend fun rawSearch(query: EventQuery): List<RawEvent> = search(query).map { it.toRawEvent() }
 
     /**
      * Stream EVERY match's (id, created_at). This is the full-corpus walk

@@ -29,6 +29,7 @@ import com.vitorpamplona.quartz.nip01Core.metadata.MetadataEvent
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.relay.normalizer.normalizeRelayUrl
 import com.vitorpamplona.quartz.nip01Core.store.IEventStore
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.nip09Deletions.DeletionEvent
 import com.vitorpamplona.quartz.nip59Giftwrap.wraps.GiftWrapEvent
 import com.vitorpamplona.quartz.nip62RequestToVanish.RequestToVanishEvent
@@ -83,6 +84,28 @@ open class NostrEventStoreTest {
         at: Long = next(),
         eventId: String = id(),
     ) = ContactCardEvent(eventId, alice, at, arrayOf(arrayOf("d", subject), arrayOf("rank", "50")), "", "")
+
+    @Test
+    fun `rawQuery matches query ids order and wire json`() =
+        runBlocking {
+            val tagged = note(tags = arrayOf(arrayOf("p", bob), arrayOf("e", id())), content = "for bob")
+            val plain = note(author = bob)
+            val older = note(at = 1, content = "oldest")
+            store.insert(tagged)
+            store.insert(plain)
+            store.insert(older)
+
+            val filter = Filter(kinds = listOf(1))
+            val viaQuery = store.query<Event>(filter)
+            val viaRaw = mutableListOf<RawEvent>()
+            store.rawQuery(listOf(filter)) { viaRaw.add(it) }
+
+            // Same recall, same newest-first order.
+            assertEquals(viaQuery.map { it.id }, viaRaw.map { it.id })
+            // Lossless: each raw event rebuilds to the exact wire JSON query() returns,
+            // tags included — proving the stored tag string passes straight through.
+            assertEquals(viaQuery.map { it.toJson() }, viaRaw.map { it.toEvent<Event>().toJson() })
+        }
 
     @Test
     fun `stores and answers nip01 filters`() =
