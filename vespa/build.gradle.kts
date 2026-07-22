@@ -38,6 +38,12 @@ dependencies {
 
 kotlin {
     jvmToolchain(21)
+    // Target Java 17 bytecode: the runtime deps (feed client, jetty) already need
+    // 17, and this lets the store's classes load in Vespa's Java-17 jdisc container
+    // for the in-container (:container-store) path. Broader compat, no downside.
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 tasks.test {

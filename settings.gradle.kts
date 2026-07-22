@@ -23,3 +23,4 @@ rootProject.name = "vespa-eventstore"
 include(":vespa")
 include(":store")
 include(":benchmark")
+include(":container-store")
