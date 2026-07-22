@@ -1,1 +1,628 @@
-{"meta":{"timestamp_ms":1784664245911,"size":"300000","batch":"1000","queries":"300","seed":"42"},"results":[{"suite":"main","name":"round-trips insert()","rt_per_event":4.27625,"reads_per_event":3.26575},{"suite":"main","name":"round-trips batchInsert()","rt_per_event":0.04775,"reads_per_event":0.045875},{"suite":"main","name":"SQLite (memory)  insert() @270k preloaded","events_per_sec":507.3814011733601},{"suite":"main","name":"SQLite (memory)  batchInsert(1000)","events_per_sec":1238.0741649213458},{"suite":"main","name":"SQLite (disk)  insert() @270k preloaded","events_per_sec":571.1937169719282},{"suite":"main","name":"SQLite (disk)  batchInsert(1000)","events_per_sec":35912.099094178964},{"suite":"main","name":"Vespa/InMemory ref* (n=8000)  insert()","events_per_sec":1179.9745584328487},{"suite":"main","name":"Vespa/InMemory ref* (n=8000)  batchInsert(1000)","events_per_sec":12302.011049727835},{"suite":"SQLite (memory)","name":"author-timeline","qps":69.94609568929503,"sum_results":5591.0,"p50_us":14180.474,"p95_us":15153.672,"p99_us":16117.257},{"suite":"SQLite (memory)","name":"kind-scan(notes)","qps":1702.6676733064974,"sum_results":60000.0,"p50_us":573.939,"p95_us":677.22,"p99_us":754.807},{"suite":"SQLite (memory)","name":"tag-mentions(p)","qps":9584.4275288528,"sum_results":949.0,"p50_us":92.682,"p95_us":165.776,"p99_us":230.788},{"suite":"SQLite (memory)","name":"id-lookup","qps":35888.54596718614,"sum_results":281.0,"p50_us":21.398,"p95_us":44.714,"p99_us":77.327},{"suite":"SQLite (memory)","name":"profile(kind0)","qps":42879.39113551488,"sum_results":171.0,"p50_us":17.968,"p95_us":33.661,"p99_us":64.589},{"suite":"SQLite (memory)","name":"count(reactions)","qps":648.3964315493745,"sum_results":0.0,"p50_us":1524.563,"p95_us":1628.065,"p99_us":1683.058},{"suite":"SQLite (memory)","name":"nip50-search","qps":5.900669178755199,"sum_results":15000.0,"p50_us":167955.151,"p95_us":178506.457,"p99_us":187377.807},{"suite":"SQLite (memory)","name":"follow-feed(a300)","qps":25.429251822933043,"sum_results":37500.0,"p50_us":39107.859,"p95_us":40474.8,"p99_us":41114.874},{"suite":"SQLite (memory)","name":"ids-set(100)","qps":919.3079753546034,"sum_results":7011.0,"p50_us":1046.719,"p95_us":1320.818,"p99_us":1391.273},{"suite":"SQLite (memory)","name":"tag-list(p100)","qps":285.88529957777604,"sum_results":22500.0,"p50_us":3428.873,"p95_us":3813.45,"p99_us":3891.249},{"suite":"SQLite (memory)","name":"contact-sync(a100)","qps":135.68284325706463,"sum_results":9880.0,"p50_us":7343.184,"p95_us":7670.195,"p99_us":8124.227},{"suite":"Vespa/InMemory ref* (n=8000)","name":"author-timeline","qps":1639.1409013386667,"sum_results":93.0,"p50_us":455.722,"p95_us":1066.051,"p99_us":1148.081},{"suite":"Vespa/InMemory ref* (n=8000)","name":"kind-scan(notes)","qps":662.4909420925943,"sum_results":15000.0,"p50_us":1482.312,"p95_us":1750.427,"p99_us":2453.302},{"suite":"Vespa/InMemory ref* (n=8000)","name":"tag-mentions(p)","qps":542.9746440180407,"sum_results":15.0,"p50_us":1841.183,"p95_us":2037.887,"p99_us":2094.076},{"suite":"Vespa/InMemory ref* (n=8000)","name":"id-lookup","qps":2261.9435596223893,"sum_results":73.0,"p50_us":402.9,"p95_us":657.205,"p99_us":681.38},{"suite":"Vespa/InMemory ref* (n=8000)","name":"profile(kind0)","qps":6229.8878454057485,"sum_results":6.0,"p50_us":141.705,"p95_us":266.032,"p99_us":364.841},{"suite":"Vespa/InMemory ref* (n=8000)","name":"count(reactions)","qps":2547.672904615466,"sum_results":0.0,"p50_us":334.531,"p95_us":632.269,"p99_us":749.053},{"suite":"Vespa/InMemory ref* (n=8000)","name":"nip50-search","qps":410.61781907451825,"sum_results":3750.0,"p50_us":2108.481,"p95_us":4764.012,"p99_us":5049.534},{"suite":"Vespa/InMemory ref* (n=8000)","name":"follow-feed(a300)","qps":1719.0117195342991,"sum_results":7983.0,"p50_us":554.643,"p95_us":704.529,"p99_us":741.535},{"suite":"Vespa/InMemory ref* (n=8000)","name":"ids-set(100)","qps":2350.7857548401266,"sum_results":2474.0,"p50_us":426.089,"p95_us":491.451,"p99_us":493.766},{"suite":"Vespa/InMemory ref* (n=8000)","name":"tag-list(p100)","qps":558.3713852264938,"sum_results":1228.0,"p50_us":1605.836,"p95_us":2534.234,"p99_us":2579.096},{"suite":"Vespa/InMemory ref* (n=8000)","name":"contact-sync(a100)","qps":6765.866905113859,"sum_results":326.0,"p50_us":134.664,"p95_us":204.985,"p99_us":209.689},{"suite":"Vespa/InMemory ref* (n=8000)","name":"parity Vespa/InMemory vs SQLite","checks":127.0,"mismatches":0.0},{"suite":"vespa","name":"batchInsert(1000)","events_per_sec":1419.136398524685},{"suite":"vespa","name":"parity Vespa vs SQLite","checks":127.0,"mismatches":0.0},{"suite":"vespa","name":"author-timeline","qps":152.9095076762795,"sum_results":5591.0,"p50_us":6294.3,"p95_us":8423.951,"p99_us":9950.173},{"suite":"vespa","name":"kind-scan(notes)","qps":75.80388779826298,"sum_results":60000.0,"p50_us":10361.558,"p95_us":18736.202,"p99_us":20691.086},{"suite":"vespa","name":"tag-mentions(p)","qps":291.75579153699755,"sum_results":949.0,"p50_us":3327.937,"p95_us":4223.523,"p99_us":5668.172},{"suite":"vespa","name":"id-lookup","qps":469.74723594893675,"sum_results":281.0,"p50_us":1975.359,"p95_us":2876.951,"p99_us":5174.383},{"suite":"vespa","name":"profile(kind0)","qps":369.1142549657676,"sum_results":171.0,"p50_us":2698.082,"p95_us":3395.068,"p99_us":4567.63},{"suite":"vespa","name":"count(reactions)","qps":133.96168484332634,"sum_results":0.0,"p50_us":7380.34,"p95_us":8032.403,"p99_us":9047.892},{"suite":"vespa","name":"nip50-search","qps":20.429959821274466,"sum_results":15000.0,"p50_us":48131.131,"p95_us":55418.983,"p99_us":68978.615},{"suite":"vespa","name":"follow-feed(a300)","qps":64.63746531450191,"sum_results":37500.0,"p50_us":15049.329,"p95_us":17668.673,"p99_us":19626.982},{"suite":"vespa","name":"ids-set(100)","qps":142.91110609080275,"sum_results":7011.0,"p50_us":6024.537,"p95_us":11801.848,"p99_us":14840.47},{"suite":"vespa","name":"tag-list(p100)","qps":87.51587103238369,"sum_results":22500.0,"p50_us":9324.254,"p95_us":20206.443,"p99_us":21673.662},{"suite":"vespa","name":"contact-sync(a100)","qps":141.9476136578186,"sum_results":9880.0,"p50_us":6814.931,"p95_us":8634.71,"p99_us":9945.629},{"suite":"vespa","name":"id-lookup@1","events_per_sec":563.955638967461,"qps":602.7025911128318,"bytes_per_event":44412.0,"p50_us":1626.754,"p95_us":1937.944,"p99_us":2575.169},{"suite":"vespa","name":"id-lookup@8","events_per_sec":2574.849050018003,"qps":2751.0374010092373,"bytes_per_event":44038.0,"p50_us":2755.945,"p95_us":4190.045,"p99_us":5167.437},{"suite":"vespa","name":"id-lookup@32","events_per_sec":4697.267484438603,"qps":5022.388013104759,"bytes_per_event":43891.0,"p50_us":6133.929,"p95_us":9440.425,"p99_us":11965.644},{"suite":"vespa","name":"id-lookup@64","events_per_sec":6062.802390854572,"qps":6480.892244707942,"bytes_per_event":43880.0,"p50_us":9437.237,"p95_us":14977.899,"p99_us":20734.298},{"suite":"vespa","name":"id-lookup@128","events_per_sec":7535.276411486166,"qps":8053.841113885363,"bytes_per_event":43922.0,"p50_us":15214.033,"p95_us":24741.319,"p99_us":31026.384},{"suite":"vespa","name":"author-timeline@1","events_per_sec":6060.408765049488,"qps":323.638323741818,"bytes_per_event":7967.0,"p50_us":3034.131,"p95_us":3554.862,"p99_us":4303.156},{"suite":"vespa","name":"author-timeline@8","events_per_sec":20507.84578125747,"qps":1094.174692708605,"bytes_per_event":7975.0,"p50_us":7029.34,"p95_us":10677.893,"p99_us":13024.995},{"suite":"vespa","name":"author-timeline@32","events_per_sec":29515.699349349696,"qps":1575.1033626853311,"bytes_per_event":7955.0,"p50_us":19776.41,"p95_us":30004.242,"p99_us":35692.846},{"suite":"vespa","name":"author-timeline@64","events_per_sec":32713.30510831823,"qps":1745.8392128574417,"bytes_per_event":7953.0,"p50_us":36067.682,"p95_us":54095.773,"p99_us":61990.28},{"suite":"vespa","name":"author-timeline@128","events_per_sec":34453.34342779897,"qps":1837.7628996721694,"bytes_per_event":7949.0,"p50_us":69153.243,"p95_us":95759.45,"p99_us":106998.714},{"suite":"vespa","name":"kind-scan(200)@1","events_per_sec":23266.04190312753,"qps":116.33020951563765,"bytes_per_event":5008.0,"p50_us":8502.831,"p95_us":9352.395,"p99_us":10130.544},{"suite":"vespa","name":"kind-scan(200)@8","events_per_sec":73524.89044691696,"qps":367.6244522345848,"bytes_per_event":5036.0,"p50_us":21320.847,"p95_us":30021.115,"p99_us":33926.687},{"suite":"vespa","name":"kind-scan(200)@32","events_per_sec":83196.07039609712,"qps":415.9803519804855,"bytes_per_event":5033.0,"p50_us":74764.12,"p95_us":112935.031,"p99_us":130826.804},{"suite":"vespa","name":"kind-scan(200)@64","events_per_sec":84503.39444144558,"qps":422.5169722072279,"bytes_per_event":5033.0,"p50_us":149177.517,"p95_us":209651.043,"p99_us":235886.388},{"suite":"vespa","name":"kind-scan(200)@128","events_per_sec":81527.81822352762,"qps":407.6390911176381,"bytes_per_event":5038.0,"p50_us":301236.297,"p95_us":450009.685,"p99_us":524970.053},{"suite":"vespa","name":"follow-feed(a300)@1","events_per_sec":38288.26245941317,"qps":76.57652491882634,"bytes_per_event":6057.0,"p50_us":12772.661,"p95_us":14932.212,"p99_us":16716.539},{"suite":"vespa","name":"follow-feed(a300)@8","events_per_sec":117134.28425192743,"qps":234.26856850385488,"bytes_per_event":6082.0,"p50_us":33515.106,"p95_us":46537.683,"p99_us":53433.653},{"suite":"vespa","name":"follow-feed(a300)@32","events_per_sec":126232.78715838846,"qps":252.46557431677692,"bytes_per_event":5539.0,"p50_us":122677.491,"p95_us":175515.891,"p99_us":202730.574},{"suite":"vespa","name":"follow-feed(a300)@64","events_per_sec":125235.8055605339,"qps":250.4716111210678,"bytes_per_event":6081.0,"p50_us":249085.387,"p95_us":360049.045,"p99_us":419580.424},{"suite":"vespa","name":"follow-feed(a300)@128","events_per_sec":118990.71881912468,"qps":237.98143763824936,"bytes_per_event":6082.0,"p50_us":521536.617,"p95_us":720839.639,"p99_us":778603.624},{"suite":"vespa","name":"ids-set(100)@1","events_per_sec":18443.539553392315,"qps":197.12750890851444,"bytes_per_event":7805.0,"p50_us":4983.369,"p95_us":5787.185,"p99_us":6383.702},{"suite":"vespa","name":"ids-set(100)@8","events_per_sec":60372.8895272492,"qps":645.3434528025771,"bytes_per_event":7828.0,"p50_us":12103.313,"p95_us":17267.612,"p99_us":20615.806},{"suite":"vespa","name":"ids-set(100)@32","events_per_sec":73327.8931330437,"qps":783.8396973554134,"bytes_per_event":7829.0,"p50_us":40001.476,"p95_us":58323.266,"p99_us":69885.187},{"suite":"vespa","name":"ids-set(100)@64","events_per_sec":77123.41969783773,"qps":824.3288616231317,"bytes_per_event":7822.0,"p50_us":76207.19,"p95_us":109370.999,"p99_us":126101.196},{"suite":"vespa","name":"ids-set(100)@128","events_per_sec":82080.94435158966,"qps":877.4032962275824,"bytes_per_event":7823.0,"p50_us":143392.643,"p95_us":188643.374,"p99_us":216268.05},{"suite":"vespa","name":"insert()","events_per_sec":112.28995352869471},{"suite":"vespa","name":"insert() duplicates","events_per_sec":371.7655050805676}]}
+{
+ "meta": {
+  "timestamp_ms": 1784682921408,
+  "size": "300000",
+  "batch": "1000",
+  "queries": "300",
+  "seed": "42",
+  "quartz": "72b8df7f6d"
+ },
+ "results": [
+  {
+   "suite": "main",
+   "name": "round-trips insert()",
+   "rt_per_event": 2.155625,
+   "reads_per_event": 1.145125
+  },
+  {
+   "suite": "main",
+   "name": "round-trips batchInsert()",
+   "rt_per_event": 0.0475,
+   "reads_per_event": 0.045625
+  },
+  {
+   "suite": "main",
+   "name": "SQLite (memory)  insert() @270k preloaded",
+   "events_per_sec": 3029.168676396392
+  },
+  {
+   "suite": "main",
+   "name": "SQLite (memory)  batchInsert(1000)",
+   "events_per_sec": 11464.710275166384
+  },
+  {
+   "suite": "main",
+   "name": "SQLite (disk)  insert() @270k preloaded",
+   "events_per_sec": 4577.764637151794
+  },
+  {
+   "suite": "main",
+   "name": "SQLite (disk)  batchInsert(1000)",
+   "events_per_sec": 24249.09976583152
+  },
+  {
+   "suite": "main",
+   "name": "Vespa/InMemory ref* (n=8000)  insert()",
+   "events_per_sec": 16211.970377852496
+  },
+  {
+   "suite": "main",
+   "name": "Vespa/InMemory ref* (n=8000)  batchInsert(1000)",
+   "events_per_sec": 25869.8785466116
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "author-timeline",
+   "qps": 28.349879101926394,
+   "sum_results": 5591.0,
+   "p50_us": 34688.232,
+   "p95_us": 42898.033,
+   "p99_us": 51835.161
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "kind-scan(notes)",
+   "qps": 864.5974359982612,
+   "sum_results": 60000.0,
+   "p50_us": 1117.445,
+   "p95_us": 1435.524,
+   "p99_us": 1725.631
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "tag-mentions(p)",
+   "qps": 5749.632924268672,
+   "sum_results": 949.0,
+   "p50_us": 151.759,
+   "p95_us": 255.198,
+   "p99_us": 353.275
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "id-lookup",
+   "qps": 29882.755010715457,
+   "sum_results": 281.0,
+   "p50_us": 28.354,
+   "p95_us": 57.441,
+   "p99_us": 96.087
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "profile(kind0)",
+   "qps": 28192.401865773158,
+   "sum_results": 171.0,
+   "p50_us": 28.957,
+   "p95_us": 62.047,
+   "p99_us": 116.498
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "count(reactions)",
+   "qps": 383.90231608638396,
+   "sum_results": 0.0,
+   "p50_us": 2579.58,
+   "p95_us": 2807.334,
+   "p99_us": 3067.392
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "nip50-search",
+   "qps": 10.440003506655193,
+   "sum_results": 15000.0,
+   "p50_us": 94436.667,
+   "p95_us": 101147.554,
+   "p99_us": 121834.168
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "follow-feed(a300)",
+   "qps": 16.5011581400545,
+   "sum_results": 37500.0,
+   "p50_us": 60581.653,
+   "p95_us": 64583.716,
+   "p99_us": 67562.373
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "ids-set(100)",
+   "qps": 639.0669826554665,
+   "sum_results": 7011.0,
+   "p50_us": 1526.786,
+   "p95_us": 1796.642,
+   "p99_us": 1909.913
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "tag-list(p100)",
+   "qps": 59.30589964454139,
+   "sum_results": 22500.0,
+   "p50_us": 16742.57,
+   "p95_us": 18890.734,
+   "p99_us": 19510.475
+  },
+  {
+   "suite": "SQLite (memory)",
+   "name": "contact-sync(a100)",
+   "qps": 81.68176925369585,
+   "sum_results": 9880.0,
+   "p50_us": 12179.98,
+   "p95_us": 14345.227,
+   "p99_us": 14759.298
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "author-timeline",
+   "qps": 804.5421230096633,
+   "sum_results": 93.0,
+   "p50_us": 1220.564,
+   "p95_us": 1352.116,
+   "p99_us": 1550.231
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "kind-scan(notes)",
+   "qps": 492.3476666964636,
+   "sum_results": 15000.0,
+   "p50_us": 2229.365,
+   "p95_us": 2540.589,
+   "p99_us": 3304.318
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "tag-mentions(p)",
+   "qps": 498.6191507170256,
+   "sum_results": 15.0,
+   "p50_us": 1832.294,
+   "p95_us": 2740.641,
+   "p99_us": 2873.891
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "id-lookup",
+   "qps": 2516.851748673359,
+   "sum_results": 73.0,
+   "p50_us": 380.717,
+   "p95_us": 509.657,
+   "p99_us": 545.834
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "profile(kind0)",
+   "qps": 4669.040074619976,
+   "sum_results": 6.0,
+   "p50_us": 201.088,
+   "p95_us": 267.778,
+   "p99_us": 288.838
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "count(reactions)",
+   "qps": 1648.5115720896529,
+   "sum_results": 0.0,
+   "p50_us": 562.93,
+   "p95_us": 741.809,
+   "p99_us": 1447.624
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "nip50-search",
+   "qps": 217.28819007976853,
+   "sum_results": 3750.0,
+   "p50_us": 4074.671,
+   "p95_us": 7377.163,
+   "p99_us": 9183.189
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "follow-feed(a300)",
+   "qps": 1557.188818238194,
+   "sum_results": 7983.0,
+   "p50_us": 619.345,
+   "p95_us": 721.922,
+   "p99_us": 777.765
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "ids-set(100)",
+   "qps": 2333.124658663862,
+   "sum_results": 2474.0,
+   "p50_us": 408.225,
+   "p95_us": 504.18,
+   "p99_us": 563.861
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "tag-list(p100)",
+   "qps": 244.35286120926577,
+   "sum_results": 1228.0,
+   "p50_us": 4195.058,
+   "p95_us": 4549.18,
+   "p99_us": 4597.901
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "contact-sync(a100)",
+   "qps": 4109.500095751352,
+   "sum_results": 326.0,
+   "p50_us": 233.13,
+   "p95_us": 280.76,
+   "p99_us": 317.034
+  },
+  {
+   "suite": "Vespa/InMemory ref* (n=8000)",
+   "name": "parity Vespa/InMemory vs SQLite",
+   "checks": 127.0,
+   "mismatches": 0.0
+  },
+  {
+   "suite": "vespa",
+   "name": "batchInsert(1000)",
+   "events_per_sec": 1019.5465843167201
+  },
+  {
+   "suite": "vespa",
+   "name": "parity Vespa vs SQLite",
+   "checks": 127.0,
+   "mismatches": 0.0
+  },
+  {
+   "suite": "vespa",
+   "name": "author-timeline",
+   "qps": 94.19640092394386,
+   "sum_results": 5591.0,
+   "p50_us": 9350.392,
+   "p95_us": 20218.593,
+   "p99_us": 26536.714
+  },
+  {
+   "suite": "vespa",
+   "name": "kind-scan(notes)",
+   "qps": 52.24921680466083,
+   "sum_results": 60000.0,
+   "p50_us": 17545.706,
+   "p95_us": 29084.943,
+   "p99_us": 36920.477
+  },
+  {
+   "suite": "vespa",
+   "name": "tag-mentions(p)",
+   "qps": 195.94499347233747,
+   "sum_results": 949.0,
+   "p50_us": 4818.15,
+   "p95_us": 6215.945,
+   "p99_us": 7991.637
+  },
+  {
+   "suite": "vespa",
+   "name": "id-lookup",
+   "qps": 472.3080991175575,
+   "sum_results": 281.0,
+   "p50_us": 2019.042,
+   "p95_us": 2795.29,
+   "p99_us": 3364.62
+  },
+  {
+   "suite": "vespa",
+   "name": "profile(kind0)",
+   "qps": 319.41629712543477,
+   "sum_results": 171.0,
+   "p50_us": 2955.726,
+   "p95_us": 4655.219,
+   "p99_us": 6713.473
+  },
+  {
+   "suite": "vespa",
+   "name": "count(reactions)",
+   "qps": 89.24944716192631,
+   "sum_results": 0.0,
+   "p50_us": 10705.235,
+   "p95_us": 14248.183,
+   "p99_us": 15820.424
+  },
+  {
+   "suite": "vespa",
+   "name": "nip50-search",
+   "qps": 10.226895069421321,
+   "sum_results": 15000.0,
+   "p50_us": 92585.774,
+   "p95_us": 132638.659,
+   "p99_us": 145960.535
+  },
+  {
+   "suite": "vespa",
+   "name": "follow-feed(a300)",
+   "qps": 40.48105363222798,
+   "sum_results": 37500.0,
+   "p50_us": 23864.209,
+   "p95_us": 30059.517,
+   "p99_us": 32222.731
+  },
+  {
+   "suite": "vespa",
+   "name": "ids-set(100)",
+   "qps": 97.92254717947166,
+   "sum_results": 7011.0,
+   "p50_us": 9938.263,
+   "p95_us": 12921.928,
+   "p99_us": 13629.512
+  },
+  {
+   "suite": "vespa",
+   "name": "tag-list(p100)",
+   "qps": 52.42822575370036,
+   "sum_results": 22500.0,
+   "p50_us": 18371.976,
+   "p95_us": 25861.887,
+   "p99_us": 27504.208
+  },
+  {
+   "suite": "vespa",
+   "name": "contact-sync(a100)",
+   "qps": 66.85328437131899,
+   "sum_results": 9880.0,
+   "p50_us": 14301.622,
+   "p95_us": 19293.148,
+   "p99_us": 22200.281
+  },
+  {
+   "suite": "vespa",
+   "name": "id-lookup@1",
+   "events_per_sec": 438.56909825085756,
+   "qps": 469.30641966672965,
+   "bytes_per_event": 44513.0,
+   "p50_us": 2065.503,
+   "p95_us": 2753.061,
+   "p99_us": 3545.538
+  },
+  {
+   "suite": "vespa",
+   "name": "id-lookup@8",
+   "events_per_sec": 1604.2627316193914,
+   "qps": 1714.1779608178547,
+   "bytes_per_event": 44102.0,
+   "p50_us": 4337.471,
+   "p95_us": 7091.577,
+   "p99_us": 10027.616
+  },
+  {
+   "suite": "vespa",
+   "name": "id-lookup@32",
+   "events_per_sec": 3315.2349876975254,
+   "qps": 3542.709498038148,
+   "bytes_per_event": 43888.0,
+   "p50_us": 8550.498,
+   "p95_us": 14026.665,
+   "p99_us": 20168.314
+  },
+  {
+   "suite": "vespa",
+   "name": "id-lookup@64",
+   "events_per_sec": 3393.174941868571,
+   "qps": 3627.7549555007295,
+   "bytes_per_event": 43936.0,
+   "p50_us": 15448.994,
+   "p95_us": 27418.023,
+   "p99_us": 80074.943
+  },
+  {
+   "suite": "vespa",
+   "name": "id-lookup@128",
+   "events_per_sec": 4858.800413034115,
+   "qps": 5193.399671180202,
+   "bytes_per_event": 43920.0,
+   "p50_us": 23041.149,
+   "p95_us": 41519.847,
+   "p99_us": 52353.713
+  },
+  {
+   "suite": "vespa",
+   "name": "author-timeline@1",
+   "events_per_sec": 4333.386468965014,
+   "qps": 231.1639264009595,
+   "bytes_per_event": 7965.0,
+   "p50_us": 4120.387,
+   "p95_us": 5932.587,
+   "p99_us": 7497.265
+  },
+  {
+   "suite": "vespa",
+   "name": "author-timeline@8",
+   "events_per_sec": 14219.711610839178,
+   "qps": 758.6477436954287,
+   "bytes_per_event": 2969.0,
+   "p50_us": 10094.725,
+   "p95_us": 16093.714,
+   "p99_us": 20874.411
+  },
+  {
+   "suite": "vespa",
+   "name": "author-timeline@32",
+   "events_per_sec": 20834.08981039842,
+   "qps": 1111.423547107987,
+   "bytes_per_event": 7963.0,
+   "p50_us": 27672.602,
+   "p95_us": 44499.054,
+   "p99_us": 55539.469
+  },
+  {
+   "suite": "vespa",
+   "name": "author-timeline@64",
+   "events_per_sec": 24274.469585642375,
+   "qps": 1294.773792033886,
+   "bytes_per_event": 7956.0,
+   "p50_us": 48333.194,
+   "p95_us": 73943.457,
+   "p99_us": 88683.477
+  },
+  {
+   "suite": "vespa",
+   "name": "author-timeline@128",
+   "events_per_sec": 25640.267489608716,
+   "qps": 1368.3431152961025,
+   "bytes_per_event": 7961.0,
+   "p50_us": 92922.377,
+   "p95_us": 130981.701,
+   "p99_us": 147612.352
+  },
+  {
+   "suite": "vespa",
+   "name": "kind-scan(200)@1",
+   "events_per_sec": 14197.663447833766,
+   "qps": 70.98831723916882,
+   "bytes_per_event": 5013.0,
+   "p50_us": 13941.984,
+   "p95_us": 16480.176,
+   "p99_us": 18681.721
+  },
+  {
+   "suite": "vespa",
+   "name": "kind-scan(200)@8",
+   "events_per_sec": 44955.98897323381,
+   "qps": 224.77994486616905,
+   "bytes_per_event": 5037.0,
+   "p50_us": 34160.585,
+   "p95_us": 51326.715,
+   "p99_us": 62953.351
+  },
+  {
+   "suite": "vespa",
+   "name": "kind-scan(200)@32",
+   "events_per_sec": 47421.68073293304,
+   "qps": 237.10840366466522,
+   "bytes_per_event": 5037.0,
+   "p50_us": 130859.78,
+   "p95_us": 191144.083,
+   "p99_us": 214710.348
+  },
+  {
+   "suite": "vespa",
+   "name": "kind-scan(200)@64",
+   "events_per_sec": 55309.74417027784,
+   "qps": 276.5487208513892,
+   "bytes_per_event": 5027.0,
+   "p50_us": 223458.086,
+   "p95_us": 325726.812,
+   "p99_us": 360520.398
+  },
+  {
+   "suite": "vespa",
+   "name": "kind-scan(200)@128",
+   "events_per_sec": 52103.52756493863,
+   "qps": 260.51763782469317,
+   "bytes_per_event": 5034.0,
+   "p50_us": 474534.861,
+   "p95_us": 672608.234,
+   "p99_us": 740861.282
+  },
+  {
+   "suite": "vespa",
+   "name": "follow-feed(a300)@1",
+   "events_per_sec": 18881.30030299973,
+   "qps": 37.76260060599946,
+   "bytes_per_event": 6061.0,
+   "p50_us": 25023.282,
+   "p95_us": 35439.53,
+   "p99_us": 48836.009
+  },
+  {
+   "suite": "vespa",
+   "name": "follow-feed(a300)@8",
+   "events_per_sec": 58597.98688015502,
+   "qps": 117.19597376031004,
+   "bytes_per_event": 6084.0,
+   "p50_us": 66674.28,
+   "p95_us": 96548.496,
+   "p99_us": 114332.371
+  },
+  {
+   "suite": "vespa",
+   "name": "follow-feed(a300)@32",
+   "events_per_sec": 64809.72974491073,
+   "qps": 129.61945948982145,
+   "bytes_per_event": 6083.0,
+   "p50_us": 241978.555,
+   "p95_us": 326808.867,
+   "p99_us": 375008.35
+  },
+  {
+   "suite": "vespa",
+   "name": "follow-feed(a300)@64",
+   "events_per_sec": 67765.75527770806,
+   "qps": 135.5315105554161,
+   "bytes_per_event": 6083.0,
+   "p50_us": 444708.3,
+   "p95_us": 628445.884,
+   "p99_us": 679693.727
+  },
+  {
+   "suite": "vespa",
+   "name": "follow-feed(a300)@128",
+   "events_per_sec": 53193.519490999875,
+   "qps": 107.06376679110312,
+   "bytes_per_event": 6134.0,
+   "p50_us": 980582.222,
+   "p95_us": 2511053.547,
+   "p99_us": 2709767.225
+  },
+  {
+   "suite": "vespa",
+   "name": "ids-set(100)@1",
+   "events_per_sec": 11725.882840283273,
+   "qps": 125.34908828411845,
+   "bytes_per_event": 7814.0,
+   "p50_us": 7751.889,
+   "p95_us": 10103.584,
+   "p99_us": 12396.782
+  },
+  {
+   "suite": "vespa",
+   "name": "ids-set(100)@8",
+   "events_per_sec": 36556.33339285853,
+   "qps": 390.70766456047124,
+   "bytes_per_event": 7837.0,
+   "p50_us": 19688.531,
+   "p95_us": 29241.408,
+   "p99_us": 35525.804
+  },
+  {
+   "suite": "vespa",
+   "name": "ids-set(100)@32",
+   "events_per_sec": 42952.299745980534,
+   "qps": 459.1188870037572,
+   "bytes_per_event": 7832.0,
+   "p50_us": 67810.225,
+   "p95_us": 100907.942,
+   "p99_us": 122824.198
+  },
+  {
+   "suite": "vespa",
+   "name": "ids-set(100)@64",
+   "events_per_sec": 42847.98732922685,
+   "qps": 458.0305466831904,
+   "bytes_per_event": 7822.0,
+   "p50_us": 133652.76,
+   "p95_us": 211777.371,
+   "p99_us": 241626.681
+  },
+  {
+   "suite": "vespa",
+   "name": "ids-set(100)@128",
+   "events_per_sec": 48377.67936095703,
+   "qps": 517.161641349252,
+   "bytes_per_event": 7824.0,
+   "p50_us": 248302.193,
+   "p95_us": 333052.136,
+   "p99_us": 385440.233
+  },
+  {
+   "suite": "vespa",
+   "name": "insert()",
+   "events_per_sec": 79.55904428473735
+  },
+  {
+   "suite": "vespa",
+   "name": "insert() duplicates",
+   "events_per_sec": 319.5261522457675
+  }
+ ]
+}

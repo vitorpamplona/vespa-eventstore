@@ -173,6 +173,19 @@ Bulk list reads clear the 50k events/sec target by >2× at concurrency 32.
 
 ## Scale study: 30k → 300k (10×) — the crossover starts moving
 
+> **Quartz `72b8df7f6d` update (2026-07-22).** The numbers in the two
+> subsections *below* were measured on the **old** SQLite store
+> (`0d534a3149`). The store has since been rebuilt (amethyst PR #3663 — FTS
+> contentless, tag-merge heap executor, pooled statements), and the
+> **same-box A/B further down** shows it moved two of the five scale curves
+> hard: **SQLite ingest no longer collapses** (the ingest crossover is gone
+> ≤400k, was ~150k) and **FTS5 search is ~2.2× faster at every size** (the
+> search crossover moved ~40k → ~260k). Author-timeline, follow-feed, and
+> id-lookup are unchanged. Parity stays **127/127** (below). Read the old
+> subsections as the historical baseline; the
+> [new-store A/B](#new-sqlite-store-quartz-72b8df7f6d-same-box-ab) is the
+> current picture.
+
 One run at `BENCH_SIZE=300000` (same box, fresh engine, parity **127/127 on
 both engines at 300k**), read against the 30k numbers. The pattern is stark:
 **every SQLite advantage shrank, every Vespa advantage grew** — because
@@ -225,7 +238,113 @@ hundred-k events": **by 300k, a feed/search-serving relay is already better
 off on this store**; a pure key-value cache of events is not.
 
 `results-300k-reference.json` in this module is the machine-readable run
-(this box), usable with `compare_results.py` as a relative reference.
+(this box), measured on Quartz `72b8df7f6d`, usable with `compare_results.py`
+as a relative reference.
+
+## New SQLite store (Quartz `72b8df7f6d`): same-box A/B
+
+The bump from `0d534a3149` → `72b8df7f6d` pulls in amethyst PR #3663
+("SQLite query scaling: FTS contentless, tag-merge, pooled statements"). To
+attribute its effect **without** cross-box noise, the scale curve
+(`BENCH_SCALE_CURVE`) was run **twice on this same box, back to back** — once
+per Quartz pin, identical prefix-stable corpus, seed 42. **Vespa's store code
+is unchanged between the two runs, so its curve is the box control**: Vespa
+ingest matched to within 8% across every checkpoint (e.g. 400k: 1,177 → 1,174
+ev/s), confirming the box did not drift — so every SQLite delta below is the
+Quartz change, not the hardware.
+
+**SQLite, old → new Quartz, same box (events/sec ingest; q/s queries):**
+
+| shape (SQLite mem) | 25k | 50k | 100k | 200k | 400k | net |
+|---|---:|---:|---:|---:|---:|---|
+| **batch ingest** | 6,380→**11,165** | 3,775→**12,590** | 1,684→**12,181** | 769→**10,475** | 306→**8,912** | **+75% → +2,815% (29× at 400k)** |
+| **NIP-50 search** | 47.8→**114.1** | 27.2→**55.5** | 13.1→**29.5** | 6.5→**15.5** | 3.4→**7.0** | **~2.2× at every size** |
+| author-timeline | 347→450 | 263→275 | 97→81 | 42→44 | 24→22 | flat (±noise) |
+| follow-feed(a300) | 33→36 | 34→32 | 25→25 | 19→18 | 16→16 | flat |
+| id-lookup | 22.7k→25.2k | 30.3k→35.4k | 32.2k→24.8k | 28.8k→32.3k | 25.5k→29.6k | flat (noisy) |
+
+**Two curves moved, three did not:**
+
+- **Batch ingest no longer collapses.** The old store fell **21×** across this
+  range (6,380 → 306 ev/s) as the table grew; the new store *rises then holds*
+  at **~9–12k ev/s** (a shallow −20% 50k→400k). This is the FTS-contentless
+  win: every `batchInsert` that supersedes a replaceable event or applies a
+  NIP-09 deletion issued FTS5 deletes that were **O(n) column scans** on the
+  old contentless-less table; the new schema seeks by rowid (**O(log n)**), so
+  the per-batch delete cost stops scaling with the corpus. It is the single
+  biggest change the bump makes.
+- **NIP-50 (FTS5) search is ~2.2× faster at every scale** (400k: 3.4 → 7.0
+  q/s). The contentless index is smaller and hotter in page cache; BM25 scoring
+  still grows with the match set, so the *slope* is unchanged — the whole curve
+  just lifts ~2.2×.
+- **author-timeline, follow-feed, id-lookup: unchanged** (every point within
+  the ±8–15% run noise this box shows). The tag-merge heap executor and pooled
+  statements did not move the single-author, author-list, or point-id paths at
+  these scales.
+
+The **per-event `insert()`** path (not on the curve, but in the 30k and 300k
+full suites) tells the same ingest story from the admission side: it degrades
+**−3.8× memory / −1.7× disk** across 30k → 300k on this box (11,555 → 3,029 and
+7,838 → 4,577 ev/s), versus the old store's documented **−12× / −9×**. In
+absolute terms at 300k the new per-event insert is **3,029 vs the old
+reference's 507 ev/s (≈6×)** — so the README's old headline "SQLite per-event
+insert collapses 9–12× by 300k" no longer holds; the same O(log n) FTS deletes
+that fix batch ingest also stop the per-event admission SELECTs from collapsing.
+
+**Where the crossovers moved (same box, size at which Vespa overtakes SQLite):**
+
+| shape | old-Quartz | new-Quartz | moved |
+|---|---:|---:|---|
+| **batch ingest** | ~125k | **> 400k (gone in range)** | **way out** — SQLite ingest now beats single-node Vespa at every tested size |
+| **NIP-50 search** | ~41k | **~260k** | **way out** — the 2.2× lift pushes the crossover 6× later |
+| author-timeline | ~62k | ~59k | unchanged |
+| follow-feed(a300) | ~42k | ~36k | ~unchanged (noise) |
+| id-lookup | none | none | unchanged (SQLite always ahead) |
+
+**New-Quartz head-to-head at 300k** (fresh `BENCH_SIZE=300000` run, same box,
+same-run SQLite/Vespa pairs, parity **127/127** on real Vespa; this is the run
+now stored in `results-300k-reference.json`):
+
+| shape | SQLite (mem) | Real Vespa | winner | was (old Quartz) |
+|---|---:|---:|---|---|
+| batch ingest (memory) | **11,464** | 1,019 | **SQLite 11×** | Vespa |
+| NIP-50 search | 10.4 | 10.2 | **even** | Vespa 3.5× |
+| count(reactions) | **384** | 89 | SQLite 4.3× | SQLite |
+| tag-list(p100) | 59.3 | 52.4 | ~even | SQLite |
+| contact-sync(a100) | **81.7** | 66.9 | SQLite 1.2× | even |
+| author-timeline | 28.3 | **94.2** | Vespa 3.3× | Vespa 2.2× |
+| follow-feed(a300) | 16.5 | **40.5** | Vespa 2.5× | Vespa 2.5× |
+| id-lookup / profile / kind-scan / ids-set | 29.9k / 28.2k / 865 / 639 | 472 / 319 / 52 / 98 | SQLite | SQLite |
+
+The two rows that **flipped toward SQLite — batch ingest (Vespa→SQLite 11×) and
+NIP-50 search (Vespa 3.5×→even) — are precisely the two the same-box A/B above
+flags as improved**, so the flip is the SQLite store getting better, not Vespa
+getting worse. (One caveat: this box's single-node Vespa runs ~25–30% slower
+than the old-reference box on some shapes, so the search "even" is *partly*
+a Vespa-side box difference; the SQLite-side gain is curve-confirmed and
+box-independent. Feeds and timelines still favor single-node Vespa — the bump
+does not touch those SQLite paths.)
+
+So the new store **buys SQLite headroom on exactly the two axes it used to lose
+first at scale — sustained ingest and full-text search.** A relay that ingests
+heavily or serves search stays on SQLite meaningfully longer than the old
+"~150k ingest / ~40k search" crossovers implied; the feed and timeline
+crossovers, which the bump doesn't touch, are unchanged.
+
+> **tag-list caveat.** The `tag-list(p100)` shape (100 `#p` values, the query
+> the tag-merge executor targets) is **not** on the scale curve, so it has no
+> clean same-box A/B here. In the 30k suite the new store measured **90 q/s**
+> vs the old README's 331 (a *cross-box* figure). The same-box control for the
+> closest list shape — `follow-feed(a300)` — is unchanged, so part of that drop
+> is box difference; but tag-merge does rewrite the tag path specifically, so a
+> real small-corpus cost (it opens one cursor per value and heap-merges, paying
+> per-stream overhead that only amortizes on large tag sets / large corpora) is
+> plausible and **unconfirmed same-box**. Flagged honestly rather than claimed.
+
+Regenerated graph: `docs/scale-curve.html` (both engines, this box, new
+Quartz). Machine-readable curves: `results-curve-reference.csv` is now the
+**new-Quartz** baseline; the old-Quartz curve is preserved in git history
+(commit that added it) for anyone reproducing the A/B.
 
 ## Query-path optimizations (applied)
 
