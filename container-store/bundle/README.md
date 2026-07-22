@@ -19,8 +19,10 @@ path is answering NIP-01 filters with the same code, not a stand-in.
   HTTP `VespaEventIndex`), compares the id lists, reports both mean latencies.
 - `VespaLocalEventIndex` — `EventIndex` over `Execution`: builds `EventYql`,
   issues a fresh sub-query, `execution.search()` + `fill()`, reconstructs
-  `EventDoc.fromSummary` from the hit fields. Read path only (writes stay on the
-  feed client; Phase B/2).
+  `EventDoc.fromSummary` from the hit fields (the read path).
+- `VespaLocalWriteIndex` + `InsertSpikeSearcher` — the write path: puts through
+  the container's `DocumentAccess` (messagebus `AsyncSession`), A/B'd against the
+  feed client on `?insertspike=1&n=N&rounds=R`.
 - The full Java-17 runtime closure (57 embedded jars, ~44 MB), wired with an
   OSGi `Bundle-ClassPath` + `DynamicImport-Package: *` — the recipe the
   quartz-in-OSGi spike proved loads cleanly under Felix.
@@ -59,6 +61,43 @@ figure the external-vs-in-container A/B in `container-bench` (reads ~2.3–3.4×
 scale-validated to 100k) is the reference; this harness exists to prove the
 *real* code path is correct in-container, which it is.
 
+## Measured — in-container INSERTS, DocumentAccess vs feed client
+
+`VespaLocalWriteIndex` puts events through the container's own `DocumentAccess`
+(messagebus `AsyncSession`), building the `Document` directly from
+`EventDoc.indexFields()`. `InsertSpikeSearcher` A/Bs it against the store's real
+`VespaEventIndex` feed client (loopback HTTP), counterbalanced, fresh unique ids
+per round so both perform genuine inserts. Vespa 8.727, single node:
+
+| mode            | local (in-container) | http (feed client) | speedup |
+|-----------------|---------------------:|-------------------:|--------:|
+| batch, n=500    | ~5,000 docs/s        | ~2,000 docs/s      | **~2.3–2.5×** |
+| batch, n=2000   | 5,290 docs/s         | 2,122 docs/s       | **2.49×** (holds) |
+| single (per-op) | ~3.4–3.7 ms/op       | ~5.3–6.3 ms/op     | **~1.4–1.8×** |
+
+28k docs written across the A/B runs, `acked == n` with **zero failures**
+required on the local path (it throws otherwise) — durable, not just fast acks.
+
+This was **better than predicted**. The going-in estimate was "modest — only the
+JSON-over-loopback-HTTP hop is removable, and the feed client already
+multiplexes." The measured ~2.3–2.5× batch win holds at n=2000 (the feed
+client's HTTP/2 multiplexing does *not* close the gap), because building the
+`Document` directly removes more than the loopback: it also skips the container's
+JSON **re-parse** on arrival (the feed path sends JSON that the container must
+parse back into a `Document`), plus the feed client's own per-op window/framing
+overhead. The dominant write cost — messagebus + indexing + content-node
+durability — is still paid identically by both, which is why the win is ~2.5×
+and not larger.
+
+So the in-container path helps **both** halves: reads ~2.3–3.4× (see
+`container-bench`), inserts ~2.3–2.5× batch. The embedded option is a real
+throughput win end to end, not just on the read side.
+
+Caveat: single-node, page-cached corpus — the fixed-overhead-dominated regime.
+At a large multi-node corpus the durability/indexing cost grows while the removed
+JSON+HTTP overhead is constant, so expect the insert ratio to compress (same
+shape as the read scaling story).
+
 ## Gotchas baked into the recipe
 - `jvmTarget = 17` on `:store`/`:vespa`/`:container-store` and a Java-17 Quartz
   (amethyst `52ce590505`) — Vespa 8.727's container runs Java 17; Java-21
@@ -72,7 +111,10 @@ scale-validated to 100k) is the reference; this harness exists to prove the
 - Its own `local` chain (a failed searcher fails the whole component graph).
 
 ## Not done (Phase B/2)
-- Write path as a `DocumentProcessor` (dedup/supersession/NIP-09/62 internal).
+- The write path here is a raw `put` (proves the DocumentAccess throughput win).
+  A real store write still needs the store's guards — dedup / supersession /
+  NIP-09 delete / NIP-62 — enforced in-container (e.g. as a `DocumentProcessor`)
+  rather than in the client.
 - Nostr REQ/EVENT `RequestHandler` + a Nostr-wire `Renderer`.
 - `EventYql` grouping `count()` in-container (currently counts the capped recall
   set — exact for the parity battery, not yet for unbounded counts).
