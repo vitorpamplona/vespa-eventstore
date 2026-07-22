@@ -53,6 +53,30 @@ parity. Reads only; the searcher does field-access reconstruction, not full Quar
 - Split baseline (500-hit feed): external ~16.7ms client / ~8.4ms server →
   in-container ≈ server time → ~2× on feed latency, ~half the fixed floor.
 
+## Quartz-in-OSGi spike result (the Phase B gate)
+
+Built a bundle embedding Quartz's full 55-jar runtime closure (Kotlin, kotlinx
+coroutines/serialization, jackson, BouncyCastle, secp256k1) and deployed a
+searcher that calls `Event.fromJson` inside Felix. Findings:
+
+- **The classloader risk is CLEARED.** The entire closure loaded with ZERO
+  class-load errors — including jackson 2.22.1 and BouncyCastle 1.84, which
+  Vespa's platform *also* exports. No split-package / version conflicts. The
+  whole non-Quartz closure is Java-8 bytecode (major 52) and resolves cleanly.
+- **The ONE blocker is a Java target mismatch.** Quartz's own classes are
+  compiled to **Java 21** (class-file major 65); Vespa 8.727's container runs
+  **Java 17** (max 61). `Event.fromJson` fails with `UnsupportedClassVersionError`.
+
+So Phase B is gated not on "does the Kotlin/OSGi mess work" (it does) but on a
+cheap, known fix — one of:
+  1. **Build Quartz with `jvmTarget = 17`** (the rest of its closure is already
+     Java-8/17-safe, so a 17-targeted Quartz artifact should just load), or
+  2. run a **Vespa release whose container is on Java 21** (verify one exists), or
+  3. skip Quartz in-container and keep the Phase-A lightweight reconstruction.
+
+Net: the embedded ("both options") path is **low-risk**, not the medium/high I
+flagged — the shared core can live in-container once Quartz is Java-17 bytecode.
+
 ## Not done (Phase B, the "full lib")
 - Write path as a `DocumentProcessor` (dedup/supersession/NIP-09/62 guards internal).
 - Nostr REQ/EVENT `RequestHandler` + a Nostr-wire `Renderer`.
