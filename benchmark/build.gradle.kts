@@ -46,3 +46,11 @@ application {
 tasks.named<JavaExec>("run") {
     maxHeapSize = System.getenv("BENCH_HEAP") ?: "2g"
 }
+
+tasks.register<JavaExec>("traceProbe") {
+    group = "verification"
+    description = "Dump Vespa query-execution plans (trace.explainLevel) for the named REQ shapes"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.vitorpamplona.quartz.eventstore.benchmark.TraceProbe")
+    maxHeapSize = System.getenv("BENCH_HEAP") ?: "2g"
+}
