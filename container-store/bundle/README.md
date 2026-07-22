@@ -61,7 +61,12 @@ figure the external-vs-in-container A/B in `container-bench` (reads ~2.3–3.4×
 scale-validated to 100k) is the reference; this harness exists to prove the
 *real* code path is correct in-container, which it is.
 
-## Measured — in-container INSERTS, DocumentAccess vs feed client
+## Measured — raw-put INSERTS (transport only), DocumentAccess vs feed client
+
+This first insert A/B (`InsertSpikeSearcher`) isolates just the **transport**: it
+puts pre-built docs, skipping the store's dedup/supersession/extraction. It's the
+*ceiling* for the write win, not the number a relay sees — for that, see the real
+end-to-end A/B below.
 
 `VespaLocalWriteIndex` puts events through the container's own `DocumentAccess`
 (messagebus `AsyncSession`), building the `Document` directly from
@@ -89,9 +94,41 @@ overhead. The dominant write cost — messagebus + indexing + content-node
 durability — is still paid identically by both, which is why the win is ~2.5×
 and not larger.
 
-So the in-container path helps **both** halves: reads ~2.3–3.4× (see
-`container-bench`), inserts ~2.3–2.5× batch. The embedded option is a real
-throughput win end to end, not just on the read side.
+## Measured — REAL end-to-end INSERTS, whole store in-container vs over HTTP
+
+This is the number a relay actually sees. `StoreInsertSpikeSearcher` runs the
+real `NostrEventStore.batchInsert` — dedup, replaceable/addressable supersession,
+NIP-09/62 deletion, NIP-50 search-field extraction — with only the `EventIndex`
+backend swapped: `VespaLocalEventIndex` (in-container, reads via `Execution` +
+writes via `DocumentAccess`) vs `VespaEventIndex` (the HTTP feed client). Corpus
+is a realistic relay kind-mix (`SpikeCorpus`); each side gets disjoint id + author
+bands so cross-side supersession can't corrupt the A/B. Vespa 8.727, single node,
+n=2000, 5 rounds, 3 runs:
+
+| run | local (in-container) | http | speedup | parity |
+|-----|---------------------:|-----:|--------:|:------:|
+| 1   | 2,227 ev/s | 1,152 ev/s | **1.93×** | OK (1767/2000) |
+| 2   | 3,193 ev/s | 1,496 ev/s | **2.13×** | OK (1767/2000) |
+| 3   | 3,808 ev/s | 2,157 ev/s | **1.77×** | OK (1767/2000) |
+
+**~1.8–2.1× on the real ingest path**, and `parity=OK` every round — the
+in-container store accepts/rejects *exactly* what the HTTP store does (identical
+1767/2000). That parity is also the correctness proof that the `DocumentAccess`
+write path honors the "an acked put is visible to search" contract the store's
+dedup relies on; if visibility lagged, the accept counts would diverge.
+
+It's a touch below the transport-only ceiling (~2.3–2.5×) because the store adds
+CPU extraction that both sides pay — but it stays ~2× rather than collapsing to
+1×, because the store's per-event cost is dominated by index **I/O** (dedup reads
++ the write), and *both* halves of that I/O are faster in-container. The read
+speedup carries the write path.
+
+So the in-container path helps **both** halves, and the whole store:
+- reads ~2.3–3.4× (see `container-bench`),
+- raw-put transport ~2.3–2.5×,
+- **real end-to-end ingest ~1.8–2.1×** — the number that matters.
+
+The embedded option is a real throughput win end to end, not just on the read side.
 
 Caveat: single-node, page-cached corpus — the fixed-overhead-dominated regime.
 At a large multi-node corpus the durability/indexing cost grows while the removed
@@ -111,10 +148,13 @@ shape as the read scaling story).
 - Its own `local` chain (a failed searcher fails the whole component graph).
 
 ## Not done (Phase B/2)
-- The write path here is a raw `put` (proves the DocumentAccess throughput win).
-  A real store write still needs the store's guards — dedup / supersession /
-  NIP-09 delete / NIP-62 — enforced in-container (e.g. as a `DocumentProcessor`)
-  rather than in the client.
-- Nostr REQ/EVENT `RequestHandler` + a Nostr-wire `Renderer`.
+- The full store (dedup / supersession / NIP-09 / NIP-62 / extraction) now runs
+  in-container via `NostrEventStore` over `VespaLocalEventIndex` — but only when
+  *driven by the spike searcher*. A production embed needs a real front door:
+  a Nostr REQ/EVENT `RequestHandler` (+ a Nostr-wire `Renderer`) that owns a
+  long-lived store and serves the relay protocol, instead of a searcher that
+  news up a store per request.
+- Alternatively, enforce the write guards as a `DocumentProcessor` so even
+  external HTTP feeders get dedup/supersession without going through the client.
 - `EventYql` grouping `count()` in-container (currently counts the capped recall
   set — exact for the parity battery, not yet for unbounded counts).
