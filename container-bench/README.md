@@ -21,6 +21,30 @@ container-bench/deploy.sh
 python3 container-bench/driver.py 150
 ```
 
+## Measured (Phase A) — in-container vs external HTTP, recall shapes
+
+Vespa 8.727, single node, 8k-doc corpus (page-cached), 2 runs (reps 120/150),
+count-parity OK on every shape (the searcher executes the same query, same match set):
+
+| shape | external (client ms) | in-container (ms) | speedup |
+|---|--:|--:|--:|
+| id-lookup       | 4.9 / 3.5  | 1.49 / 1.03 | **3.3× / 3.4×** |
+| author-timeline | 4.9 / 3.6  | 1.58 / 1.34 | **3.1× / 2.7×** |
+| follow-feed(300)| 16.8 / 17.8| 5.99 / 5.82 | **2.8× / 3.1×** |
+| kind-scan(200)  | 7.4 / 6.7  | 3.09 / 2.97 | **2.4× / 2.3×** |
+| tag-list(p100)  | 16.2 / 23.1| 3.85 / 3.73 | **4.2× / 6.2×** (noisy external) |
+
+**Reads are ~2.3–3.4× faster in-container** (tag-list more, noisier). In-container
+even beats server `searchtime` — it drops the container's request-handling +
+response-prep too, not just network + JSON encode/parse + client parse.
+
+Caveats: 8k corpus is page-cached, so this is the *fixed-overhead-dominated*
+regime where the win is largest; at a much larger corpus the engine work (match +
+summary-fill) grows while the removed overhead is constant, so the ratio should
+compress — measure at scale before generalizing. Count-parity, not full id-order
+parity. Reads only; the searcher does field-access reconstruction, not full Quartz
+`EventFactory` (a real store adds ~equal reconstruction cost to both paths).
+
 ## Findings so far
 - The searcher deploys, loads, and executes in-container (Vespa 8.727, Java 17).
 - Gotchas baked into the build: `--release 17`, `DynamicImport-Package: *`, its own
