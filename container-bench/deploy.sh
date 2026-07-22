@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Build the bundle and deploy app+bench-chain to a running Vespa (data persists).
+# Injects the `bench` search chain into a TEMP copy of vespa/app so the tracked
+# services.xml stays clean. Requires a running `vespa` container with corpus loaded.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; app="$here/../vespa/app"
+bash "$here/build-bundle.sh"
+tmp="$(mktemp -d)"; cp -r "$app"/. "$tmp/"; mkdir -p "$tmp/components"; cp "$here/relaybench.jar" "$tmp/components/"
+python3 - "$tmp/services.xml" <<'PY'
+import sys; p=sys.argv[1]; s=open(p).read()
+s=s.replace("<search />",
+ '<search>\n      <chain id="bench" inherits="vespa">\n'
+ '        <searcher id="relay.bench.BenchSearcher" bundle="relaybench" />\n'
+ '      </chain>\n    </search>')
+open(p,"w").write(s)
+PY
+(cd "$tmp" && zip -rq /tmp/bench-app.zip .)
+curl -s --noproxy '*' -H "Content-Type: application/zip" --data-binary @/tmp/bench-app.zip \
+  http://localhost:19071/application/v2/tenant/default/prepareandactivate \
+  | python3 -c "import sys,json;print('deploy:',json.load(sys.stdin).get('message','?')[:120])"
