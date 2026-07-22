@@ -74,8 +74,20 @@ cheap, known fix — one of:
   2. run a **Vespa release whose container is on Java 21** (verify one exists), or
   3. skip Quartz in-container and keep the Phase-A lightweight reconstruction.
 
-Net: the embedded ("both options") path is **low-risk**, not the medium/high I
-flagged — the shared core can live in-container once Quartz is Java-17 bytecode.
+### RESOLVED — jvmTarget=17 fix verified
+
+Amethyst merged `jvmTarget = 17` (commit **52ce590505**). Re-ran the exact spike
+with that Quartz build:
+
+- The new Quartz artifact is **Java-17 bytecode (class-file major 61)**, down from
+  65. The repo still builds + tests clean against it (HTTP path unaffected).
+- Rebuilt the 55-jar bundle with the new closure, redeployed, and `Event.fromJson`
+  now returns **`ok=true` — "Event loaded; parsed OK; kind=1"** inside Felix.
+
+**Quartz-in-OSGi is CONFIRMED WORKING.** The embedded ("both options") path is fully
+unblocked: the shared core, Quartz included, loads and runs in-container. Phase B is
+now gated only on the code work (VespaLocalEventIndex + DocumentProcessor + handler),
+not on any feasibility unknown.
 
 ## Not done (Phase B, the "full lib")
 - Write path as a `DocumentProcessor` (dedup/supersession/NIP-09/62 guards internal).
