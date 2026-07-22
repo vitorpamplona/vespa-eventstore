@@ -66,54 +66,51 @@ class Bench3Handler
             val n = request.getProperty("n")?.toIntOrNull() ?: 20_000
             val reps = request.getProperty("reps")?.toIntOrNull() ?: 300
             val run = request.getProperty("run")?.toIntOrNull() ?: 1
+            // `stores` lets a caller run ONE store per request (fits the request budget
+            // at very large n, where ingesting all three synchronously overruns it).
+            val want = (request.getProperty("stores") ?: "sqlite,embed,http").split(",").map { it.trim() }.toSet()
 
             val out = StringBuilder()
-            out.append("in-container 3-way — n=$n reps=$reps run=$run\n")
-            out.append("(all driven in-process from the container JVM; higher = faster)\n\n")
+            out.append("in-container bench — n=$n reps=$reps run=$run stores=${want.joinToString(",")}\n")
 
-            val results =
-                try {
-                    // Disjoint bands: SQLite independent; embed vs http must not collide on the shared backend.
-                    val sqlite = bench("sqlite", SqliteEventStore(dbName = null), corpus(n, run, "5", "6"), reps)
-                    val embed = bench("embed", NostrEventStore(local()), corpus(n, run, "b$run", "a"), reps)
-                    val http = bench("http", NostrEventStore(VespaEventIndex(baseUrl = LOOPBACK)), corpus(n, run, "d$run", "c"), reps)
-                    listOf(sqlite, embed, http)
-                } catch (t: Throwable) {
-                    out
-                        .append("FAILED: ")
-                        .append(t.javaClass.name)
-                        .append(": ")
-                        .append(t.message)
-                        .append('\n')
-                    var c = t.cause
-                    while (c != null) {
-                        out
-                            .append("  <- ")
-                            .append(c.javaClass.name)
-                            .append(": ")
-                            .append(c.message)
-                            .append('\n')
-                        c = c.cause
-                    }
-                    return text(out.toString())
+            try {
+                for (name in listOf("sqlite", "embed", "http")) {
+                    if (name !in want) continue
+                    // Disjoint bands: SQLite independent; embed vs http must not collide on a shared backend.
+                    val store: IEventStore =
+                        when (name) {
+                            "sqlite" -> SqliteEventStore(dbName = null)
+                            "embed" -> NostrEventStore(local())
+                            else -> NostrEventStore(VespaEventIndex(baseUrl = LOOPBACK))
+                        }
+                    val band =
+                        when (name) {
+                            "sqlite" -> "5" to "6"
+                            "embed" -> "b$run" to "a"
+                            else -> "d$run" to "c"
+                        }
+                    val r = bench(name, store, corpus(n, run, band.first, band.second), reps)
+                    out.append("== $name ==\n")
+                    out.append(String.format("batchInsert %.0f%n", r.insertPerSec))
+                    for (shape in SHAPES.map { it.first }) out.append(String.format("%s %.0f%n", shape, r.qps[shape] ?: 0.0))
                 }
-
-            // Insert throughput.
-            out.append(String.format("%-18s %14s %14s %14s%n", "INSERT (ev/s)", "sqlite", "embed", "http"))
-            out.append(String.format("%-18s %14.0f %14.0f %14.0f%n%n", "batchInsert", results[0].insertPerSec, results[1].insertPerSec, results[2].insertPerSec))
-
-            // Query throughput per shape.
-            out.append(String.format("%-18s %14s %14s %14s%n", "QUERY (q/s)", "sqlite", "embed", "http"))
-            for (shape in SHAPES.map { it.first }) {
-                out.append(
-                    String.format(
-                        "%-18s %14.0f %14.0f %14.0f%n",
-                        shape,
-                        results[0].qps[shape] ?: 0.0,
-                        results[1].qps[shape] ?: 0.0,
-                        results[2].qps[shape] ?: 0.0,
-                    ),
-                )
+            } catch (t: Throwable) {
+                out
+                    .append("FAILED: ")
+                    .append(t.javaClass.name)
+                    .append(": ")
+                    .append(t.message)
+                    .append('\n')
+                var c = t.cause
+                while (c != null) {
+                    out
+                        .append("  <- ")
+                        .append(c.javaClass.name)
+                        .append(": ")
+                        .append(c.message)
+                        .append('\n')
+                    c = c.cause
+                }
             }
             return text(out.toString())
         }
