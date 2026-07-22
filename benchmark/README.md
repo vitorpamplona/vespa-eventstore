@@ -179,75 +179,55 @@ multiplexed HTTP/2 connection. That parallelism, not single-query latency, is
 the read-side case for the Vespa store; SQLite's in-process reads don't overlap
 the same way.
 
-## Scale study: 30k → 300k (10×) — the crossover starts moving
+## Scale study: 25k → 400k
 
-> **Quartz `72b8df7f6d` update (2026-07-22).** The numbers in the two
-> subsections *below* were measured on the **old** SQLite store
-> (`0d534a3149`). The store has since been rebuilt (amethyst PR #3663 — FTS
-> contentless, tag-merge heap executor, pooled statements), and the
-> **same-box A/B further down** shows it moved two of the five scale curves
-> hard: **SQLite ingest no longer collapses** (the ingest crossover is gone
-> ≤400k, was ~150k) and **FTS5 search is ~2.2× faster at every size** (the
-> search crossover moved ~40k → ~260k). Author-timeline, follow-feed, and
-> id-lookup are unchanged. Parity stays **127/127** (below). Read the old
-> subsections as the historical baseline; the
-> [new-store A/B](#new-sqlite-store-quartz-72b8df7f6d-same-box-ab) is the
-> current picture.
+The full curves — five metrics × five checkpoints, both engines — are in
+[`docs/scale-curve.html`](../docs/scale-curve.html) (interactive, log–log). One
+prefix-stable seed-42 corpus was delta-ingested into both engines and measured
+at each checkpoint (`BENCH_SCALE_CURVE`, this box; Vespa a single shared-core
+container, so its absolute numbers are conservative — the *shape* is the point).
+Parity holds **127/127** on both engines at every checkpoint.
 
-One run at `BENCH_SIZE=300000` (same box, fresh engine, parity **127/127 on
-both engines at 300k**), read against the 30k numbers. The pattern is stark:
-**every SQLite advantage shrank, every Vespa advantage grew** — because
-SQLite's costs scale with the table while Vespa's are dominated by
-size-independent fixed costs at this range.
+The pattern: **SQLite's multi-row read shapes erode with the table while Vespa
+stays flat**, so the two engines cross as the corpus grows.
 
-**SQLite degradation, 30k → 300k (its own numbers):**
+| metric (q/s unless noted) | 25k | 50k | 100k | 200k | 400k | crossover |
+|---|---:|---:|---:|---:|---:|---|
+| author-timeline — SQLite | 599 | 303 | 155 | 51.5 | 25.5 | **≈ 70k** |
+| author-timeline — Vespa | 176 | 280 | 290 | 255 | 242 | |
+| NIP-50 search — SQLite | 162 | 65.6 | 40.4 | 16.1 | 9.6 | **≈ 140k** |
+| NIP-50 search — Vespa | 42.2 | 48.8 | 32.2 | 19.2 | 12.5 | |
+| follow-feed(a300) — SQLite | 49.8 | 40.9 | 36.9 | 23.3 | 23.6 | none ≤400k |
+| follow-feed(a300) — Vespa | 14.3 | 14.9 | 15.0 | 14.8 | 15.3 | (gap narrows) |
+| id-lookup(16) — SQLite | 5,318 | 5,117 | 5,721 | 3,854 | 5,146 | none (~50×) |
+| id-lookup(16) — Vespa | 81 | 101 | 100 | 107 | 106 | |
+| batch ingest ev/s — SQLite | 15,950 | 16,456 | 16,743 | 15,157 | 11,947 | none (8–24×) |
+| batch ingest ev/s — Vespa | 661 | 1,490 | 1,635 | 1,715 | 1,424 | |
 
-| path | 30k | 300k | change |
-|---|---:|---:|---|
-| per-event `insert()` (at scale, memory) | 6,216 ev/s | 507 ev/s | **−12×** |
-| per-event `insert()` (at scale, disk) | 5,041 ev/s | 571 ev/s | **−9×** |
-| `batchInsert` (memory) | 6,912 ev/s | 1,238 ev/s | −5.6× |
-| author-timeline | 522 q/s | 69.9 q/s | **−7.5×** |
-| NIP-50 search (FTS5) | 51.5 q/s | 5.9 q/s | **−8.7×** |
-| count(reactions) | 5,637 q/s | 648 q/s | −8.7× |
-| id-lookup | 54,453 q/s | 35,888 q/s | −34% |
-| kind-scan / follow-feed | 1,733 / 27.9 | 1,702 / 25.4 | ~flat |
+Read:
 
-(disk `batchInsert` stays ~36k ev/s — WAL amortization scales; the per-event
-admission SELECTs against a growing B-tree are what collapse.)
+- **Author timelines cross ≈70k.** SQLite falls 23× (599 → 26 q/s) as the
+  single-author index walk lengthens; Vespa's fast-search attribute holds ~260
+  q/s flat. Past ~70k, Vespa is the faster engine for this shape.
+- **NIP-50 search crosses ≈140k.** SQLite's FTS5 decays 162 → 9.6 q/s over the
+  growing match set; Vespa flattens and overtakes. (Both fall in absolute terms;
+  Vespa just falls less — trust-ranked relevance is the reason to run it here,
+  not raw speed.)
+- **follow-feed, id-lookup(16), and ingest never cross ≤400k on this box.**
+  SQLite's in-process reads pay no HTTP hop, and this single-node container's
+  follow-feed sits at ~15 q/s single-threaded. The follow-feed gap narrows
+  (SQLite 50 → 24, Vespa flat ~15) but does not close — its real Vespa win is
+  **concurrency**, not single-query throughput (§3b: 78k events/sec at conc 32).
 
-**Vespa over the same growth: essentially flat.** Ingest 718 → **1,419 ev/s**
-(chunk-1000; size-independent), per-event insert 117 → 112 ev/s, duplicates
-311 → 372 ev/s, follow-feed 66.8 → 64.6 q/s, contact-sync 130 → 142,
-concurrent follow-feed **126k events/sec at conc 32** (higher than at 30k).
-The one real Vespa degradation is NIP-50 search, 81 → 20 q/s — ranking runs
-over a 10× match set — which **re-opens the two-phase ranking study**: its
-precondition ("a corpus large enough for the win to appear") is now met.
+Extrapolating the eroding SQLite curves, more shapes flip past ~1M. Practical
+read: **a search/timeline-serving relay starts to benefit from this store in the
+low hundreds-of-thousands of events; a point-lookup or small-corpus cache stays
+better on SQLite.** The [store-migration A/B](#new-sqlite-store-quartz-72b8df7f6d-same-box-ab)
+below isolates what amethyst PR #3663 changed in SQLite itself (old pin
+`0d534a3149` → `72b8df7f6d`), run twice on this box with Vespa as the control.
 
-**Head-to-head at 300k (single node):**
-
-| shape | SQLite (mem) | Real Vespa | winner |
-|---|---:|---:|---|
-| NIP-50 search | 5.9 | **20.4** | Vespa 3.5× |
-| follow-feed(a300) | 25.4 | **64.6** | Vespa 2.5× |
-| author-timeline | 69.9 | **152.9** | Vespa 2.2× |
-| contact-sync(a100) | 135.7 | 141.9 | even |
-| batch ingest (memory) | 1,238 | **1,419** | Vespa |
-| count(reactions) | 648 | 134 | SQLite (shrinking) |
-| tag-list(p100) | 286 | 87.5 | SQLite (shrinking) |
-| id-lookup / profile / kind-scan / ids-set | 35.9k / 42.9k / 1.7k / 919 | 470 / 369 / 76 / 143 | SQLite |
-
-Read: at 300k the Vespa store already wins **search, feeds, timelines, and
-sustained ingest** — the workloads a relay lives on — while SQLite keeps
-point lookups and flat scans (fixed-cost-bound on Vespa's side, still
-index-walk-cheap on SQLite's). Extrapolating the curves, more shapes flip by
-~1M. The practical crossover is therefore much earlier than "a few
-hundred-k events": **by 300k, a feed/search-serving relay is already better
-off on this store**; a pure key-value cache of events is not.
-
-`results-300k-reference.json` in this module is the machine-readable run
-(this box), measured on Quartz `72b8df7f6d`, usable with `compare_results.py`
-as a relative reference.
+Runs written with `BENCH_JSON=` are machine-readable and diff with
+`compare_results.py` as a relative reference.
 
 ## New SQLite store (Quartz `72b8df7f6d`): same-box A/B
 
@@ -299,45 +279,21 @@ reference's 507 ev/s (≈6×)** — so the README's old headline "SQLite per-eve
 insert collapses 9–12× by 300k" no longer holds; the same O(log n) FTS deletes
 that fix batch ingest also stop the per-event admission SELECTs from collapsing.
 
-**Where the crossovers moved (same box, size at which Vespa overtakes SQLite):**
-
-| shape | old-Quartz | new-Quartz | moved |
-|---|---:|---:|---|
-| **batch ingest** | ~125k | **> 400k (gone in range)** | **way out** — SQLite ingest now beats single-node Vespa at every tested size |
-| **NIP-50 search** | ~41k | **~260k** | **way out** — the 2.2× lift pushes the crossover 6× later |
-| author-timeline | ~62k | ~59k | unchanged |
-| follow-feed(a300) | ~42k | ~36k | ~unchanged (noise) |
-| id-lookup | none | none | unchanged (SQLite always ahead) |
-
-**New-Quartz head-to-head at 300k** (fresh `BENCH_SIZE=300000` run, same box,
-same-run SQLite/Vespa pairs, parity **127/127** on real Vespa; this is the run
-now stored in `results-300k-reference.json`):
-
-| shape | SQLite (mem) | Real Vespa | winner | was (old Quartz) |
-|---|---:|---:|---|---|
-| batch ingest (memory) | **11,464** | 1,019 | **SQLite 11×** | Vespa |
-| NIP-50 search | 10.4 | 10.2 | **even** | Vespa 3.5× |
-| count(reactions) | **384** | 89 | SQLite 4.3× | SQLite |
-| tag-list(p100) | 59.3 | 52.4 | ~even | SQLite |
-| contact-sync(a100) | **81.7** | 66.9 | SQLite 1.2× | even |
-| author-timeline | 28.3 | **94.2** | Vespa 3.3× | Vespa 2.2× |
-| follow-feed(a300) | 16.5 | **40.5** | Vespa 2.5× | Vespa 2.5× |
-| id-lookup / profile / kind-scan / ids-set | 29.9k / 28.2k / 865 / 639 | 472 / 319 / 52 / 98 | SQLite | SQLite |
-
-The two rows that **flipped toward SQLite — batch ingest (Vespa→SQLite 11×) and
-NIP-50 search (Vespa 3.5×→even) — are precisely the two the same-box A/B above
-flags as improved**, so the flip is the SQLite store getting better, not Vespa
-getting worse. (One caveat: this box's single-node Vespa runs ~25–30% slower
-than the old-reference box on some shapes, so the search "even" is *partly*
-a Vespa-side box difference; the SQLite-side gain is curve-confirmed and
-box-independent. Feeds and timelines still favor single-node Vespa — the bump
-does not touch those SQLite paths.)
+The **current SQLite-vs-Vespa crossovers** are the fresh
+[scale study](#scale-study-25k--400k) above — author timelines ≈70k, NIP-50
+search ≈140k, and feeds / point-reads / ingest never crossing ≤400k on this box.
+Those supersede an older `BENCH_SIZE=300000` head-to-head that used to sit here:
+this box runs its single-node Vespa container slower than the earlier reference
+box, so the absolute Vespa figures shifted and are no longer directly
+comparable. The box-**independent** result is the SQLite-side change measured
+above (Vespa held as the control): sustained ingest stops collapsing, and FTS5
+search lifts ~2.2× at every size.
 
 So the new store **buys SQLite headroom on exactly the two axes it used to lose
 first at scale — sustained ingest and full-text search.** A relay that ingests
 heavily or serves search stays on SQLite meaningfully longer than the old
 "~150k ingest / ~40k search" crossovers implied; the feed and timeline
-crossovers, which the bump doesn't touch, are unchanged.
+crossovers are set by the fresh curve above.
 
 > **tag-list caveat.** The `tag-list(p100)` shape (100 `#p` values, the query
 > the tag-merge executor targets) is **not** on the scale curve, so it has no
@@ -597,14 +553,16 @@ drives the store from N coroutines for a fixed duration and reports events/sec,
 queries/sec, GC time, and **bytes allocated per event** (from the JVM beans) at
 rising concurrency — the real metric, and the GC lens.
 
-Steady-state, single 4-core node that the benchmark client *shares*, ~15k-doc
-corpus, `numthreadspersearch=1`:
+The current headline concurrency numbers are in [§3b](#3b-list-shaped-reqs-and-concurrency--where-vespas-parallelism-shows)
+(fresh 30k run, conc 1/8/32 — follow-feed clears the 50k target at conc 32).
+The figures below are a deeper GC-focused run at higher concurrency (@128) on a
+~15k-doc corpus, `numthreadspersearch=1`, kept for the allocation findings:
 
 | query (events/query) | events/sec @128 | bytes/event |
 |---|---:|---:|
 | kind-scan (200) | **~66,000–76,000** | ~9,200 |
 | author-timeline (50) | ~27,000 | ~12,800 |
-| id-lookup (1) | ~6,000 q/s | ~49,000 |
+| id-lookup (16 ids) | ~6,000 q/s | ~49,000 |
 
 **Bulk reads clear the 50k events/sec target**, and because the client and Vespa
 are fighting over the same 4 cores here, separate hardware would go higher.
@@ -769,9 +727,9 @@ SQLite bug to report upstream, not something to "fix" by breaking this store.
 ## Where to hammer performance (framework optimization targets)
 
 1. **Push ingest onto `batchInsert`.** The single biggest win, already available:
-   ~89× fewer round-trips. Any syncer/relay path still calling `insert()` in a
-   loop against Vespa is leaving ~16× on the table. Consider making the per-event
-   `insert()` documentation warn against bulk use, or coalescing bursts.
+   ~47× fewer round-trips (§1). Any syncer/relay path still calling `insert()` in a
+   loop against Vespa is leaving ~7× wall-clock on the table. Consider making the
+   per-event `insert()` documentation warn against bulk use, or coalescing bursts.
 2. **Trim the per-event read fan-out — DONE (`GuardOwners`).** The store now
    tracks the owners with any stored tombstone/vanish (two grouping queries at
    load, maintained on every guard written, self-disabling at the engine's

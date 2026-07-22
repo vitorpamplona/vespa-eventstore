@@ -73,29 +73,29 @@
 const SIZES = [25000, 50000, 100000, 200000, 400000];
 const DATA = {
   "batch ingest (events/sec)": {
-    note: "no crossover ≤400k — SQLite ahead 27×→5× as Vespa's feed pipeline fills",
-    sqlite: [16625, 15136, 14071, 12143, 7874],
-    vespa:  [623, 1635, 1638, 1577, 1524],
+    note: "no crossover ≤400k — SQLite 24×→8× ahead; both hold their band",
+    sqlite: [15950, 16456, 16743, 15157, 11947],
+    vespa:  [661, 1490, 1635, 1715, 1424],
   },
   "author-timeline (q/s)": {
-    note: "crossover ≈ 70k — SQLite falls 23× (643→28), Vespa holds ~220",
-    sqlite: [643, 318, 152, 62.2, 27.8],
-    vespa:  [175, 266, 257, 220, 224],
+    note: "crossover ≈ 70k — SQLite falls 23× (599→26), Vespa holds ~260",
+    sqlite: [599, 303, 155, 51.5, 25.5],
+    vespa:  [176, 280, 290, 255, 242],
   },
   "follow-feed, 300 authors (q/s)": {
-    note: "SQLite declines 48→23, Vespa flat ~15; gap narrows, no crossover ≤400k",
-    sqlite: [48.5, 42.4, 34.8, 26.0, 22.6],
-    vespa:  [14.4, 14.9, 14.8, 13.3, 14.9],
+    note: "SQLite declines 50→24, Vespa flat ~15; gap narrows, no crossover ≤400k",
+    sqlite: [49.8, 40.9, 36.9, 23.3, 23.6],
+    vespa:  [14.3, 14.9, 15.0, 14.8, 15.3],
   },
   "NIP-50 search (q/s)": {
-    note: "crossover ≈ 280k — SQLite FTS5 decays 119→9.5, Vespa flattens and overtakes",
-    sqlite: [119, 78.4, 40.0, 18.9, 9.5],
-    vespa:  [32.1, 50.5, 31.5, 11.2, 11.8],
+    note: "crossover ≈ 140k — SQLite FTS5 decays 162→9.6, Vespa flattens and overtakes",
+    sqlite: [162, 65.6, 40.4, 16.1, 9.6],
+    vespa:  [42.2, 48.8, 32.2, 19.2, 12.5],
   },
-  "id-lookup (q/s)": {
-    note: "no crossover — in-process point reads stay ~50–100× ahead (no network hop)",
-    sqlite: [18876, 50011, 48751, 39790, 32700],
-    vespa:  [532, 599, 614, 235, 425],
+  "id-lookup, 16 ids (q/s)": {
+    note: "no crossover — 16 in-process point reads stay ~50× ahead (no network hop)",
+    sqlite: [5318, 5117, 5721, 3854, 5146],
+    vespa:  [81.1, 101, 99.8, 107, 106],
   },
 };
 const W = 340, H = 220, M = {t: 8, r: 12, b: 26, l: 46};
