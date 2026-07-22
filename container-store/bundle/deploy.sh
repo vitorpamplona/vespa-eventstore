@@ -3,10 +3,13 @@
 # running Vespa (data persists). Injects the chain into a TEMP copy of vespa/app
 # so the tracked services.xml stays clean. Requires a running `vespa` container.
 set -euo pipefail
-here="$(cd "$(dirname "$0")" && pwd)"; app="$here/../../vespa/app"
-bash "$here/build-bundle.sh"
+here="$(cd "$(dirname "$0")" && pwd)"; root="$here/../.."; app="$root/vespa/app"
+# The bundle is a real Gradle build artifact (:container-store:containerBundle) —
+# the embedded closure is whatever runtimeClasspath resolves, so it can't drift.
+( cd "$root" && ./gradlew -q :container-store:containerBundle )
+bundle="$root/container-store/build/bundle/containerstore-bundle.jar"
 tmp="$(mktemp -d)"; cp -r "$app"/. "$tmp/"
-mkdir -p "$tmp/components"; cp "$here/containerstore.jar" "$tmp/components/"
+mkdir -p "$tmp/components"; cp "$bundle" "$tmp/components/containerstore.jar"
 python3 - "$tmp/services.xml" <<'PY'
 import sys; p=sys.argv[1]; s=open(p).read()
 pkg="com.vitorpamplona.quartz.eventstore.container"

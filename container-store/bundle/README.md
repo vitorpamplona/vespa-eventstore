@@ -29,13 +29,24 @@ path is answering NIP-01 filters with the same code, not a stand-in.
 
 ## Run (needs docker + a running Vespa, JDK 17+, a loaded corpus)
 ```bash
-# from repo root, with a `vespa` container up and a corpus ingested:
-container-store/bundle/deploy.sh      # build bundle + deploy the `local` chain
-python3 container-store/bundle/driver.py 80
+# from repo root, with a `vespa` container up:
+container-store/bundle/deploy.sh      # build the bundle + deploy chain & handler
+# the read A/B and both insert A/Bs are HTTP-driven (they generate their own corpus):
+curl 'localhost:8080/search/?searchChain=local&storeinsert=1&n=2000&rounds=5&run=1'
+curl 'localhost:8080/embedded-store?n=300'   # embedded store smoke test (ok=true)
 ```
-`deploy.sh` injects a `local` search chain into a TEMP copy of `vespa/app`, so
-the tracked `services.xml` stays clean. `build-bundle.sh` re-jars the three
-in-repo modules on every build so the bundle always ships current code.
+`deploy.sh` builds the bundle via Gradle (`:container-store:containerBundle`) and
+injects a `local` search chain + the embedded `handler` into a TEMP copy of
+`vespa/app`, so the tracked `services.xml` stays clean.
+
+## How the bundle is built
+`:container-store:containerBundle` (a Gradle `Jar` task) is the single source of
+truth: it embeds this module's jar plus its entire `runtimeClasspath` closure
+(store, vespa, Quartz, kotlin/coroutines/serialization, okhttp, …) under
+`dependencies/` and wires a `Bundle-ClassPath` + `DynamicImport-Package: *`
+manifest. The container APIs are `compileOnly`, so they're excluded automatically.
+Because the closure is whatever Gradle resolves, it can't drift from the code, and
+the bundle builds in CI — no hand-assembled jar folder.
 
 ## Measured — in-container NIP-01 parity, Vespa 8.727, 7.5k-doc corpus
 

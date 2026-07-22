@@ -24,3 +24,43 @@ kotlin {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
+
+// The deployable OSGi bundle: this module's classes plus its full runtime closure
+// (store, vespa, Quartz, kotlin/coroutines/serialization, okhttp, ...) embedded
+// under dependencies/ and wired with a Bundle-ClassPath. The container APIs are
+// compileOnly, so runtimeClasspath already EXCLUDES them (they come from the
+// platform); DynamicImport-Package: * resolves them at load. This replaces the
+// hand-rolled Python/shell assembly — the closure is now whatever Gradle resolves,
+// so it can't drift, and it builds in CI.
+val containerBundle by tasks.registering(Jar::class) {
+    description = "Assembles the containerstore OSGi bundle (classes + embedded runtime closure)."
+    group = "build"
+    archiveBaseName.set("containerstore-bundle")
+    destinationDirectory.set(layout.buildDirectory.dir("bundle"))
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    val jarTask = tasks.named("jar", Jar::class)
+    val ownJar = jarTask.flatMap { it.archiveFile }
+    dependsOn(jarTask)
+
+    // Deferred closures so the jars are copied as FILES (into dependencies/) at
+    // execution time — never expanded — and resolution happens after the jar exists.
+    from({ ownJar.get().asFile }) { into("dependencies") }
+    from({ configurations.getByName("runtimeClasspath").files }) { into("dependencies") }
+
+    manifest {
+        attributes(
+            "Manifest-Version" to "1.0",
+            "Bundle-ManifestVersion" to "2",
+            "Bundle-Name" to "containerstore",
+            "Bundle-SymbolicName" to "containerstore",
+            "Bundle-Version" to libs.versions.app.get(),
+            "DynamicImport-Package" to "*",
+        )
+    }
+    // Bundle-ClassPath must list every embedded jar; compute once inputs resolve.
+    doFirst {
+        val jars = listOf(ownJar.get().asFile) + configurations.getByName("runtimeClasspath").files
+        manifest.attributes["Bundle-ClassPath"] = (listOf(".") + jars.map { "dependencies/${it.name}" }).joinToString(",")
+    }
+}
