@@ -158,14 +158,21 @@ shape as the read scaling story).
   (verified empirically: hits > 0, parity OK).
 - Its own `local` chain (a failed searcher fails the whole component graph).
 
-## Not done (Phase B/2)
-- The full store (dedup / supersession / NIP-09 / NIP-62 / extraction) now runs
-  in-container via `NostrEventStore` over `VespaLocalEventIndex` — but only when
-  *driven by the spike searcher*. A production embed needs a real front door:
-  a Nostr REQ/EVENT `RequestHandler` (+ a Nostr-wire `Renderer`) that owns a
-  long-lived store and serves the relay protocol, instead of a searcher that
-  news up a store per request.
-- Alternatively, enforce the write guards as a `DocumentProcessor` so even
-  external HTTP feeders get dedup/supersession without going through the client.
-- `EventYql` grouping `count()` in-container (currently counts the capped recall
-  set — exact for the parity battery, not yet for unbounded counts).
+## The embeddable library (done)
+`EmbeddedEventStore.open(executionFactory | executionSource, documentAccess)`
+returns a long-lived `NostrEventStore` running fully in-container: hot reads/writes
+in-process, cold grouping/visit + reputation delegated to a loopback client, trust
+projection wired in (rank profile does the ranking server-side). `EmbeddedStoreHandler`
+is the front-door shape — a jdisc `RequestHandler` (not a searcher: a searcher
+injecting `ExecutionFactory` cycles the component graph), opening the store lazily.
+`:container-store:containerBundle` is the deployable OSGi bundle. `EmbeddedStoreIT`
+deploys it to a real Vespa and asserts the in-container store answers correctly.
+
+## Not done (the consumer's front door)
+- A Nostr REQ/EVENT WebSocket handler (+ a Nostr-wire `Renderer`) on top of the
+  embedded store — deliberately left to the consumer (jdisc isn't a natural
+  WebSocket host; that tradeoff is theirs to make).
+- Optionally enforce the write guards as a `DocumentProcessor`, so even external
+  HTTP feeders get dedup/supersession without going through the client.
+- Cold-path result-parsing is delegated to the loopback client, not re-ported
+  in-container — fine (those calls are rare); revisit only if profiling says so.
