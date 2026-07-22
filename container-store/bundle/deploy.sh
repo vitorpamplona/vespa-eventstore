@@ -13,6 +13,8 @@ s=s.replace("<search />",
  '<search>\n      <chain id="local" inherits="vespa">\n'
  '        <searcher id="com.vitorpamplona.quartz.eventstore.container.LocalStoreSearcher" '
  'bundle="containerstore" />\n'
+ '        <searcher id="com.vitorpamplona.quartz.eventstore.container.InsertSpikeSearcher" '
+ 'bundle="containerstore" />\n'
  '      </chain>\n    </search>')
 open(p,"w").write(s)
 PY
