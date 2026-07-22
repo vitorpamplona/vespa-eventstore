@@ -34,6 +34,25 @@ count-parity OK on every shape (the searcher executes the same query, same match
 | kind-scan(200)  | 7.4 / 6.7  | 3.09 / 2.97 | **2.4× / 2.3×** |
 | tag-list(p100)  | 16.2 / 23.1| 3.85 / 3.73 | **4.2× / 6.2×** (noisy external) |
 
+### Scale validation (8k -> 100k): the win holds for light shapes, compresses for heavy
+
+Re-ran the A/B at 100k docs (93,365 loaded), count-parity OK on every shape:
+
+| shape | 8k speedup | 100k speedup | reads |
+|---|--:|--:|---|
+| id-lookup       | 3.3x | **3.3x** | holds — transport-bound (1-doc match) |
+| author-timeline | 3.1x | **3.2x** | holds — transport-bound |
+| follow-feed(300)| 2.8x | **2.3x** | mild compression |
+| kind-scan(200)  | 2.4x | **1.55x** | strong compression (50k-doc match; both paths pay it) |
+| tag-list(p100)  | 4.2x | 7.1x | noisy (external swings 16-30 ms) |
+
+The in-container advantage is largest where the query is small and the HTTP
+bridge dominates (point reads, timelines: ~3x, flat with scale), and compresses
+where match/summary work grows (kind-scan: both paths pay the big server cost, so
+the ratio collapses toward 1). For a relay the hot shapes are timelines and feeds
+(~2.3-3.2x, holding), not full kind-scans. Expect kind-scan to compress further
+toward ~1.2-1.3x by 400k; the point/timeline shapes should stay ~3x.
+
 **Reads are ~2.3–3.4× faster in-container** (tag-list more, noisier). In-container
 even beats server `searchtime` — it drops the container's request-handling +
 response-prep too, not just network + JSON encode/parse + client parse.
