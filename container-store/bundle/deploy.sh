@@ -26,6 +26,9 @@ s=s.replace("<search />",
  # injected it would form a component-graph cycle).
  f'    <handler id="{pkg}.EmbeddedStoreHandler" bundle="containerstore">\n'
  '      <binding>http://*/embedded-store*</binding>\n'
+ '    </handler>\n'
+ f'    <handler id="{pkg}.NostrRelayHandler" bundle="containerstore">\n'
+ '      <binding>http://*/nostr*</binding>\n'
  '    </handler>')
 open(p,"w").write(s)
 PY
