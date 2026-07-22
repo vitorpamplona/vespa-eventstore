@@ -60,7 +60,7 @@ object ThroughputBench {
         val w = BenchWorkload.from(corpus)
         val shapes =
             listOf<Triple<String, Int, suspend (Int) -> Int>>(
-                Triple("id-lookup", 1) { i -> store.query<Event>(Filter(ids = listOf(w.id(i)))).size },
+                Triple("id-lookup(16)", 16) { i -> store.query<Event>(Filter(ids = w.idList(i, 16))).size },
                 Triple("author-timeline", 50) { i -> store.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50)).size },
                 Triple("kind-scan(200)", 200) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)).size },
                 // List-shaped REQs under concurrency — the follow-feed is THE

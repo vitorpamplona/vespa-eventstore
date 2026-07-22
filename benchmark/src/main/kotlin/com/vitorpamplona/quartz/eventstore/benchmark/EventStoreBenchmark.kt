@@ -332,7 +332,7 @@ object EventStoreBenchmark {
         query("author-timeline", reps) { i -> store.query<Event>(Filter(authors = listOf(workload.author(i)), limit = 50)) }
         query("kind-scan(notes)", reps) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)) }
         query("tag-mentions(p)", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(workload.author(i))), limit = 50)) }
-        query("id-lookup", reps) { i -> store.query<Event>(Filter(ids = listOf(workload.id(i)))) }
+        query("id-lookup(16)", reps) { i -> store.query<Event>(Filter(ids = workload.idList(i, 16))) }
         query("profile(kind0)", reps) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(workload.author(i)), limit = 1)) }
         query("count(reactions)", reps) { store.count(Filter(kinds = listOf(7))) }
         query("nip50-search", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), search = workload.term(i), limit = 50)) }
