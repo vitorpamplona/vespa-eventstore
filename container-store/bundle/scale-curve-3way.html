@@ -129,30 +129,30 @@
 
 <script>
 (function () {
-  const SIZES = [10000, 40000, 100000];
-  const fmt = (v) => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k" : String(v);
+  const SIZES = [10000, 40000, 100000, 200000];
+  const fmt = (v) => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k" : String(Math.round(v));
   const PANELS = [
-    { key: "author-timeline", unit: "q/s", win: "embed overtakes SQLite by ≈100k.",
-      note: "SQLite falls ~10× as the DB grows; embed stays flat and crosses it.",
-      sqlite: [1208, 418, 128], embed: [162, 314, 277], http: [118, 196, 172] },
-    { key: "count (kind 7)", unit: "q/s", win: "gap 50× → 15×, still closing.",
-      note: "SQLite's count drops with size; the Vespa stores hold flat.",
-      sqlite: [5935, 3462, 1283], embed: [119, 131, 87], http: [187, 203, 151] },
-    { key: "follow-feed (300 authors)", unit: "q/s", win: "embed ≈22× SQLite, ≈37× http — at every size.",
+    { key: "author-timeline", unit: "q/s", win: "embed overtakes SQLite ~70k, ~5× ahead by 200k.",
+      note: "SQLite falls ~20× as the DB grows; embed stays flat and crosses it.",
+      sqlite: [1208, 418, 128, 58], embed: [162, 314, 277, 293], http: [118, 196, 172, 187] },
+    { key: "count (kind 7)", unit: "q/s", win: "gap 50× → 6×, converging.",
+      note: "SQLite's count drops steadily with size; the Vespa stores hold flat.",
+      sqlite: [5935, 3462, 1283, 656], embed: [119, 131, 87, 86], http: [187, 203, 151, 106] },
+    { key: "follow-feed (300 authors)", unit: "q/s", win: "embed ≈29× SQLite, ≈48× http — at every size.",
       note: "Heavy fan-out: SQLite's 300-way OR collapses; embed answers in-process.",
-      sqlite: [29, 27, 24], embed: [574, 587, 549], http: [14, 16, 15] },
-    { key: "kind-scan (kind 1)", unit: "q/s", win: "embed ≈3× http, flat with size.",
+      sqlite: [29, 27, 24, 25], embed: [574, 587, 549, 726], http: [14, 16, 15, 15] },
+    { key: "kind-scan (kind 1)", unit: "q/s", win: "embed ≈2–3× http, flat with size.",
       note: "Broad scan; SQLite fast, embed steady, http pays JSON per hit.",
-      sqlite: [850, 1320, 1075], embed: [112, 179, 182], http: [64, 61, 74] },
-    { key: "tag-mentions (#p)", unit: "q/s", win: "embed ≈2× http.",
-      note: "SQLite ~15× at this scale; embed holds its transport edge.",
-      sqlite: [5044, 7738, 6816], embed: [404, 479, 470], http: [165, 274, 221] },
-    { key: "id-lookup", unit: "q/s", win: "SQLite ~50× — permanent.",
+      sqlite: [850, 1320, 1075, 1257], embed: [112, 179, 182, 178], http: [64, 61, 74, 80] },
+    { key: "tag-mentions (#p)", unit: "q/s", win: "embed ≈1.5–2× http.",
+      note: "SQLite still ahead here; embed holds its transport edge over http.",
+      sqlite: [5044, 7738, 6816, 8477], embed: [404, 479, 470, 476], http: [165, 274, 221, 310] },
+    { key: "id-lookup", unit: "q/s", win: "SQLite ~40–60× — permanent.",
       note: "A hash in RAM. Flat ~30k q/s; Vespa never catches a point lookup.",
-      sqlite: [22540, 30975, 30830], embed: [372, 586, 625], http: [399, 599, 690] },
+      sqlite: [22540, 30975, 30830, 25708], embed: [372, 586, 625, 588], http: [399, 599, 690, 665] },
     { key: "batch insert", unit: "ev/s", win: "embed ~1.5× http; both rise with batch size.",
       note: "SQLite in-memory leads; embed's DocumentAccess beats loopback feed.",
-      sqlite: [14902, 14812, 14837], embed: [934, 1804, 2346], http: [734, 1242, 1537] },
+      sqlite: [14902, 14812, 14837, 15866], embed: [934, 1804, 2346, 2825], http: [734, 1242, 1537, 1794] },
   ];
 
   const W = 300, H = 168, padL = 40, padR = 14, padT = 12, padB = 26;
@@ -223,6 +223,7 @@
   th += `</tbody>`;
   document.getElementById("table").innerHTML = th;
   document.getElementById("foot").textContent =
-    "Vespa 8.727, single node, single-thread, page-cached. Fresh container per DB size (10k / 40k / 100k events).";
+    "Vespa 8.727, single node, single-thread, page-cached. Fresh container per DB size (" +
+    SIZES.map(fmt).join(" / ") + " events).";
 })();
 </script>
