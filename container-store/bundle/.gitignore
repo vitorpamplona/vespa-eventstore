@@ -1,0 +1,5 @@
+# Build artifacts: the embedded third-party closure is staged from the module
+# build + Quartz's runtime deps, and the fat bundle is assembled by build-bundle.sh.
+# Neither belongs in git (47 MB of jars). Reproduce with build-bundle.sh.
+dependencies/
+containerstore.jar
