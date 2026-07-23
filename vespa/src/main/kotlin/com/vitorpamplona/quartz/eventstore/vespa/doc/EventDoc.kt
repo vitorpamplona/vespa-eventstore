@@ -20,8 +20,11 @@
  */
 package com.vitorpamplona.quartz.eventstore.vespa.doc
 import com.vitorpamplona.quartz.eventstore.vespa.isSingleLetterTagName
+import com.vitorpamplona.quartz.nip01Core.core.Address
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
+import com.vitorpamplona.quartz.nip01Core.core.isAddressable
+import com.vitorpamplona.quartz.nip01Core.core.isReplaceable
 import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.nip01Core.tags.dTag.dTag
 import com.vitorpamplona.quartz.nip40Expiration.expiration
@@ -91,6 +94,19 @@ data class EventDoc(
 
     /** The first `d` tag's value — an addressable event's identity key; null/blank = none. */
     fun dTag(): String? = dTagOrEmpty().takeIf { it.isNotEmpty() }
+
+    /**
+     * The NIP-01 address (`kind:pubkey[:dtag]`) for replaceable/addressable
+     * kinds; null for regular events. This is the natural unique key those kinds
+     * supersede on — and, under address-keyed storage, their document id.
+     * Replaceables use the fixed empty d-tag; addressables use their `d` value.
+     */
+    fun addressOrNull(): String? =
+        when {
+            kind.isReplaceable() -> Address.assemble(kind, pubkey)
+            kind.isAddressable() -> Address.assemble(kind, pubkey, dTagOrEmpty())
+            else -> null
+        }
 
     /** The document's field map — one shape for both feeding and summary parsing ([fromSummary]). */
     fun indexFields(): JsonObject =

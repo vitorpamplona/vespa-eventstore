@@ -21,6 +21,7 @@
 package com.vitorpamplona.quartz.eventstore.vespa.client
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
+import com.vitorpamplona.quartz.nip01Core.core.isAddressable
 import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 
 /**
@@ -136,7 +137,46 @@ interface EventIndex : AutoCloseable {
      * delegate to its inner index, not this default.
      */
     suspend fun scanAuthors(query: EventQuery): Set<String> = distinctAuthors(query)
+
+    /**
+     * Store [doc] IFF it wins its NIP-01 address (highest `created_at`; ties
+     * broken by the LOWEST id) — replaceable/addressable supersession as a single
+     * call. Returns true when [doc] was stored (and any older version at the
+     * address removed), false when a same-or-newer version already held it.
+     * Non-replaceable docs are stored unconditionally (true).
+     *
+     * The default realizes it the obvious way — search the address, compare,
+     * supersede — which is what the in-memory reference and today's store do, so
+     * outcomes match the per-event rules exactly. The real client OVERRIDES it
+     * with an address-keyed conditional put, letting the engine enforce
+     * newest-wins atomically and reject stale versions server-side with no read.
+     * A decorator MUST delegate to its inner index, not this default.
+     */
+    suspend fun putIfNewer(doc: EventDoc): Boolean {
+        val address =
+            doc.addressOrNull() ?: run {
+                put(doc)
+                return true
+            }
+        val q =
+            if (doc.kind.isAddressable()) {
+                EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey), tags = mapOf("d" to listOf(doc.dTagOrEmpty())))
+            } else {
+                EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey))
+            }
+        val existing = search(q).filter { it.addressOrNull() == address }
+        val incumbent = existing.minWithOrNull(REPLACEABLE_WINNER)
+        // Incumbent wins or is identical -> reject the incoming (stale) version.
+        if (incumbent != null && REPLACEABLE_WINNER.compare(doc, incumbent) >= 0) return false
+        existing.forEach { remove(it.id) }
+        put(doc)
+        return true
+    }
 }
+
+/** NIP-01 replaceable winner order: newest `created_at` first, ties to the LOWEST id. */
+internal val REPLACEABLE_WINNER: Comparator<EventDoc> =
+    compareByDescending<EventDoc> { it.createdAt }.thenBy { it.id }
 
 /** The (id, created_at[, d tag]) projection [EventIndex.visitIds] streams — all a sync diff or projection walk needs. */
 data class DocRef(
