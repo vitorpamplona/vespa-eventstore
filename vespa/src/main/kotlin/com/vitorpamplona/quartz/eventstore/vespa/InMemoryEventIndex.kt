@@ -34,7 +34,12 @@ import com.vitorpamplona.quartz.eventstore.vespa.query.EventYql
  * search fields — recall-equivalent for tests (docs with no search fields are
  * invisible to search, like SQLite's FTS table); real ranking is Vespa's job.
  */
-class InMemoryEventIndex : EventIndex {
+class InMemoryEventIndex(
+    // Test hook: exercise the bulk path's putIfNewer branch (the address-keyed
+    // engine's supersession) against the reference, which still resolves it via
+    // the read-based default — so outcomes must match the read-then-supersede path.
+    override val supersedesViaPut: Boolean = false,
+) : EventIndex {
     private val docs = LinkedHashMap<String, EventDoc>()
 
     override suspend fun get(id: String): EventDoc? = docs[id]

@@ -222,11 +222,34 @@ internal class BulkInsert(
 
         fun alive() = events.indices.filter { outcome[it] == null }
 
-        // Stage D — supersession per replaceable address, resolved in run order.
-        // Existing versions for every touched address, chunked. Replaceables are
-        // fetched by (kind, authors…). Addressables are fetched by
-        // (kind, author, d-tags…) via tag_index recall, then bucketed doc-side
-        // (the d filter is exact there).
+        // Stage D — supersession per replaceable address.
+        if (index.supersedesViaPut) {
+            // The address-keyed engine enforces newest-wins per put, so replay
+            // each address's run through putIfNewer IN ORDER — identical to the
+            // per-event path, so outcomes match the read path exactly: an event
+            // that loses to the stored version OR to an earlier same-batch version
+            // comes back false and is REPLACED. Different addresses run
+            // concurrently; a single address stays sequential (each put depends on
+            // the previous). Replaceable winners are written by putIfNewer itself;
+            // toPut carries only the regular events.
+            IngestStats.timed("versions") {
+                groups.entries.toList().mapBounded(QUERY_FANOUT) { (_, idxs) ->
+                    for (i in idxs) {
+                        if (!index.putIfNewer(events[i].toDoc())) {
+                            outcome[i] = IEventStore.InsertOutcome.Rejected(Rejections.REPLACED)
+                        }
+                    }
+                }
+            }
+            if (toPut.isNotEmpty()) index.putAll(toPut.values.map { it.toDoc() })
+            alive().forEach { i -> outcome[i] = IEventStore.InsertOutcome.Accepted }
+            return outcome.map { it ?: IEventStore.InsertOutcome.Rejected(Rejections.INSERT_FAILED) }
+        }
+
+        // Read-then-supersede (default): existing versions for every touched
+        // address, chunked. Replaceables are fetched by (kind, authors…).
+        // Addressables are fetched by (kind, author, d-tags…) via tag_index recall,
+        // then bucketed doc-side (the d filter is exact there).
         val existing = HashMap<Triple<Int, String, String?>, MutableList<EventDoc>>()
         val addressable = groups.keys.filter { it.third != null }
         val replaceable = groups.keys.filter { it.third == null }

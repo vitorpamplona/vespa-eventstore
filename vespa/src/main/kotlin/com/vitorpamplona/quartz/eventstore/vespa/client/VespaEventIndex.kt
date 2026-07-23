@@ -167,6 +167,10 @@ class VespaEventIndex(
     // so they route through the `id`-attribute search, which finds both.
     private val addressKeyed = System.getenv("VESPA_ADDRESS_KEYED")?.toBooleanStrictOrNull() ?: false
 
+    // Under address-keying the engine enforces newest-wins (conditional put), so
+    // the bulk path skips its version-read stage and calls putIfNewer instead.
+    override val supersedesViaPut: Boolean get() = addressKeyed
+
     /** The document id for [doc]: its address when address-keyed and replaceable, else its event id. */
     private fun docIdOf(doc: EventDoc): String = if (addressKeyed) doc.addressOrNull() ?: doc.id else doc.id
 

@@ -37,6 +37,14 @@ import com.vitorpamplona.quartz.nip01Core.store.RawEvent
  * query-then-write semantics sound under a single writer.
  */
 interface EventIndex : AutoCloseable {
+    /**
+     * When true, replaceable/addressable supersession is enforced by the engine
+     * via [putIfNewer] (an address-keyed conditional put) rather than the client
+     * reading the current versions first. The bulk path checks this to skip its
+     * version-read stage. Default false — the read-then-supersede behavior.
+     */
+    val supersedesViaPut: Boolean get() = false
+
     suspend fun get(id: String): EventDoc?
 
     suspend fun put(doc: EventDoc)
