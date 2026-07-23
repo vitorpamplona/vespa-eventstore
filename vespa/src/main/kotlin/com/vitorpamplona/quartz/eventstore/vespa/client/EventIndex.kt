@@ -124,6 +124,18 @@ interface EventIndex : AutoCloseable {
      * ride the capped search.
      */
     suspend fun distinctAuthors(query: EventQuery): Set<String> = search(query).mapTo(HashSet()) { it.pubkey }
+
+    /**
+     * Every distinct author of [query]'s match set, EXHAUSTIVELY — unlike
+     * [distinctAuthors], whose server-side grouping caps at
+     * `EventYql.MAX_AUTHOR_GROUPS`. The guard-owner preload needs completeness,
+     * not a sample: a missed author would be a false negative in the guard
+     * filter (a skipped-but-needed tombstone probe). The default rides the
+     * uncapped in-memory [distinctAuthors]; the real client overrides it with a
+     * continuation-paged visit so it never silently truncates. A decorator MUST
+     * delegate to its inner index, not this default.
+     */
+    suspend fun scanAuthors(query: EventQuery): Set<String> = distinctAuthors(query)
 }
 
 /** The (id, created_at[, d tag]) projection [EventIndex.visitIds] streams — all a sync diff or projection walk needs. */

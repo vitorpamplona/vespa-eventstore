@@ -22,12 +22,10 @@ package com.vitorpamplona.quartz.eventstore.store
 
 import com.vitorpamplona.quartz.eventstore.vespa.client.EventIndex
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
-import com.vitorpamplona.quartz.eventstore.vespa.query.EventYql
 import com.vitorpamplona.quartz.nip09Deletions.DeletionEvent
 import com.vitorpamplona.quartz.nip62RequestToVanish.RequestToVanishEvent
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The set of owners with ANY stored tombstone or vanish — the key that lets the
@@ -48,56 +46,63 @@ import java.util.concurrent.ConcurrentHashMap
  *    kind 5/62 directly to the engine would bypass this (and every other
  *    query-then-write guarantee); that deployment shape needs the probes, so
  *    it should disable the cache.
- *  - The engine's grouping is capped at [EventYql.MAX_AUTHOR_GROUPS]; a corpus
- *    with that many distinct deleters can't be represented faithfully, so the
- *    cache DISABLES itself and every insert probes, exactly as before.
+ *  - Scale: the flagged owners live in a [GuardBloom], not an exact set, so a
+ *    relay with millions of distinct deleters costs a few MB and the guard-skip
+ *    KEEPS WORKING. The Bloom's no-false-negative property is exactly the
+ *    UNDER-flag prohibition above; a false positive is just the harmless
+ *    over-flag (a wasted probe). The load must be EXHAUSTIVE — [EventIndex.scanAuthors]
+ *    is the uncapped visit, not the grouping [distinctAuthors] that truncates.
+ *  - A FOREIGN feeder writing kind 5/62 directly to the engine still bypasses
+ *    [noteGuardStored]; that deployment must set `GUARD_OWNERS_DISABLE=1` so
+ *    every insert probes.
  */
 internal class GuardOwners(
     private val index: EventIndex,
 ) {
     @Volatile
-    private var flagged: MutableSet<String>? = null
+    private var bloom: GuardBloom? = null
 
+    // Config-only now (a foreign direct-feeder deployment). No longer tripped by
+    // deleter cardinality — the Bloom scales where the old exact set gave up.
     @Volatile
-    private var disabled = false
+    private var disabled = System.getenv("GUARD_OWNERS_DISABLE")?.toBooleanStrictOrNull() ?: false
 
     private val loadLock = Mutex()
 
     /** False only when this owner provably has no stored tombstone/vanish — the probes can be skipped. */
     suspend fun mightHaveGuards(owner: String): Boolean {
         if (disabled) return true
-        val set = loaded() ?: return true
-        return owner in set
+        val b = loaded() ?: return true
+        return b.mightContain(owner)
     }
 
     /** The subset of [owners] that can have guard docs at all (bulk path: query only these). */
     suspend fun filterFlagged(owners: Collection<String>): Collection<String> {
         if (disabled) return owners
-        val set = loaded() ?: return owners
-        return owners.filter { it in set }
+        val b = loaded() ?: return owners
+        return owners.filter { b.mightContain(it) }
     }
 
     /** A kind 5/62 by [author] was just stored — their events must probe from now on. */
     fun noteGuardStored(author: String) {
-        flagged?.add(author)
+        bloom?.add(author)
     }
 
-    private suspend fun loaded(): Set<String>? {
-        flagged?.let { return it }
+    private suspend fun loaded(): GuardBloom? {
+        bloom?.let { return it }
         if (disabled) return null
         loadLock.withLock {
-            flagged?.let { return it }
-            val deleters = index.distinctAuthors(EventQuery(kinds = listOf(DeletionEvent.KIND)))
-            val vanishers = index.distinctAuthors(EventQuery(kinds = listOf(RequestToVanishEvent.KIND)))
-            if (deleters.size >= EventYql.MAX_AUTHOR_GROUPS || vanishers.size >= EventYql.MAX_AUTHOR_GROUPS) {
-                disabled = true
-                return null
-            }
-            val set = ConcurrentHashMap.newKeySet<String>()
-            set.addAll(deleters)
-            set.addAll(vanishers)
-            flagged = set
-            return set
+            bloom?.let { return it }
+            val deleters = index.scanAuthors(EventQuery(kinds = listOf(DeletionEvent.KIND)))
+            val vanishers = index.scanAuthors(EventQuery(kinds = listOf(RequestToVanishEvent.KIND)))
+            // Size for the loaded set plus headroom for guards stored this run;
+            // overfill only raises the (harmless) false-positive rate, never
+            // yields a false negative.
+            val b = GuardBloom(expectedInsertions = (deleters.size + vanishers.size) * 4 + 4096)
+            deleters.forEach { b.add(it) }
+            vanishers.forEach { b.add(it) }
+            bloom = b
+            return b
         }
     }
 }

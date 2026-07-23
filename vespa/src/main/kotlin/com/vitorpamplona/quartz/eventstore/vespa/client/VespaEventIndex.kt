@@ -404,6 +404,37 @@ class VespaEventIndex(
     }
 
     /**
+     * Complete author scan via the document-API visit (continuation-paged, no
+     * result cap), projecting only `pubkey`. Unlike [distinctAuthors]'s grouping
+     * this never truncates at `MAX_AUTHOR_GROUPS`, which is exactly what the
+     * guard-owner Bloom preload needs — a missed author would be a false negative.
+     */
+    override suspend fun scanAuthors(query: EventQuery): Set<String> {
+        val selection = EventSelection.build(query) ?: return super.scanAuthors(query)
+        val fieldSet = "$DOCTYPE:pubkey"
+        val base =
+            "${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid" +
+                "?selection=${URLEncoder.encode(selection, "UTF-8")}" +
+                "&wantedDocumentCount=$VISIT_PAGE&fieldSet=${URLEncoder.encode(fieldSet, "UTF-8")}"
+        val authors = HashSet<String>()
+        var continuation: String? = null
+        while (true) {
+            val resp = send(continuation?.let { "$base&continuation=$it" } ?: base)
+            require(resp.statusCode() < 400) { "vespa visit ${resp.statusCode()}: ${resp.body().take(300)}" }
+            val json = Json.parseToJsonElement(resp.body()).jsonObject
+            json["documents"]?.jsonArray?.forEach { d ->
+                d.jsonObject["fields"]
+                    ?.jsonObject
+                    ?.get("pubkey")
+                    ?.jsonPrimitive
+                    ?.content
+                    ?.let { authors += it }
+            }
+            continuation = json["continuation"]?.jsonPrimitive?.content ?: return authors
+        }
+    }
+
+    /**
      * POST [vq] to `/search/` and return the raw response body. POSTs because a
      * filter with hundreds of ids or authors builds YQL far past any sane URL
      * length. The recall path ([search]) streams this straight into typed docs;
