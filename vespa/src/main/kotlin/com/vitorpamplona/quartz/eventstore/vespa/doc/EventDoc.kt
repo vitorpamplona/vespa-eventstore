@@ -20,10 +20,12 @@
  */
 package com.vitorpamplona.quartz.eventstore.vespa.doc
 import com.vitorpamplona.quartz.eventstore.vespa.isSingleLetterTagName
+import com.vitorpamplona.quartz.nip01Core.core.Address
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.core.HexKey
-import com.vitorpamplona.quartz.nip01Core.tags.dTag.dTag
-import com.vitorpamplona.quartz.nip40Expiration.expiration
+import com.vitorpamplona.quartz.nip01Core.core.isAddressable
+import com.vitorpamplona.quartz.nip01Core.core.isReplaceable
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -82,14 +84,40 @@ data class EventDoc(
             if (isSingleLetterTagName(name)) "$name:$value" else null
         }
 
-    /** The NIP-40 expiration timestamp (Quartz's reader); null = never expires. */
-    fun expiresAt(): Long? = tagsArray().expiration()
+    /**
+     * The NIP-40 expiration timestamp; null = never expires. A direct scan over
+     * [tags] — same result as Quartz's `String[][].expiration()` (first
+     * `expiration` tag with a parseable value) without the per-call `String[][]`
+     * deep copy [tagsArray] would make. Called on every put (see [indexFields]).
+     */
+    fun expiresAt(): Long? =
+        tags.firstNotNullOfOrNull { tag ->
+            if (tag.size > 1 && tag[0] == "expiration" && tag[1].isNotEmpty()) tag[1].toLongOrNull() else null
+        }
 
-    /** The `d` tag value, or "" when absent — the addressable bucketing key (missing == empty). */
-    fun dTagOrEmpty(): String = tagsArray().dTag()
+    /**
+     * The `d` tag value, or "" when absent — the addressable bucketing key
+     * (missing == empty). A direct scan over [tags], matching Quartz's
+     * `String[][].dTag()` (`firstTagValue("d") ?: ""`) with no `String[][]` copy;
+     * this is on the address/supersession hot path.
+     */
+    fun dTagOrEmpty(): String = tags.firstOrNull { it.size > 1 && it[0] == "d" }?.get(1) ?: ""
 
     /** The first `d` tag's value — an addressable event's identity key; null/blank = none. */
     fun dTag(): String? = dTagOrEmpty().takeIf { it.isNotEmpty() }
+
+    /**
+     * The NIP-01 address (`kind:pubkey[:dtag]`) for replaceable/addressable
+     * kinds; null for regular events. This is the natural unique key those kinds
+     * supersede on — and, under address-keyed storage, their document id.
+     * Replaceables use the fixed empty d-tag; addressables use their `d` value.
+     */
+    fun addressOrNull(): String? =
+        when {
+            kind.isReplaceable() -> Address.assemble(kind, pubkey)
+            kind.isAddressable() -> Address.assemble(kind, pubkey, dTagOrEmpty())
+            else -> null
+        }
 
     /** The document's field map — one shape for both feeding and summary parsing ([fromSummary]). */
     fun indexFields(): JsonObject =
@@ -116,6 +144,15 @@ data class EventDoc(
 
     /** The complete NIP-01 event JSON, rebuilt from the exact stored values via Quartz's canonical serializer. */
     fun toEventJson(): String = Event(id, pubkey, createdAt, kind, tagsArray(), content, sig).toJson()
+
+    /**
+     * This doc as a Quartz [RawEvent]: the wire event with `tags` kept as its
+     * canonical JSON string. A raw recall path hands this straight to a relay's
+     * serializer (which splices `jsonTags` verbatim), so no per-tag object is
+     * ever built or re-serialized. The Vespa client overrides its recall to build
+     * the RawEvent from the decoded summary directly, skipping even this EventDoc.
+     */
+    fun toRawEvent(): RawEvent = RawEvent(id, pubkey, createdAt, kind, tagsAsJson().toString(), content, sig)
 
     private fun tagsAsJson(): JsonArray = JsonArray(tags.map { tag -> JsonArray(tag.map(::JsonPrimitive)) })
 

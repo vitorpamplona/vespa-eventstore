@@ -58,6 +58,7 @@ object IngestSweep {
         println(String.format("%-8s %8s %14s %14s  %s", "chunk", "streams", "events/sec", "ms/chunk", "chunk latency tail"))
 
         VespaEventStore.open(url).use { store ->
+            Warmup.warm(store) // steady-state, not JIT warmup — see Warmup
             var cell = 0
             for (chunk in chunkSizes) {
                 for (streams in streamCounts) {

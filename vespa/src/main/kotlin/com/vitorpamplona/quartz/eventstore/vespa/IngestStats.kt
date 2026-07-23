@@ -72,4 +72,14 @@ object IngestStats {
         if (parts.isEmpty()) return ""
         return "stages " + parts.joinToString(" ") { (n, d) -> "$n %.1fs".format(d / 1e9) }
     }
+
+    /** Every stage's cumulative seconds, no threshold — the full split for profiling. */
+    fun dump(): String {
+        if (stages.isEmpty()) return "stages (none)"
+        return "stages " +
+            stages.entries
+                .map { (n, t) -> n to t.get() }
+                .sortedByDescending { it.second }
+                .joinToString(" ") { (n, ns) -> "$n %.2fs".format(ns / 1e9) }
+    }
 }

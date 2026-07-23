@@ -42,6 +42,7 @@ object InsertProbe {
         println("insert probe @ $url  band=0x${band.toString(16)}  size=$size  seed=$seed")
         val events = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = seed + 7, idBand = band))
         VespaEventStore.open(url).use { store ->
+            Warmup.warm(store) // steady-state, not JIT warmup — see Warmup
             var ok = 0
             val freshLat = Latencies()
             val freshNanos = measureNanoTime { for (e in events) if (freshLat.timed { runCatching { store.insert(e) } }.isSuccess) ok++ }

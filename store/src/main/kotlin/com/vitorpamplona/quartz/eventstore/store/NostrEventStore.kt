@@ -37,6 +37,7 @@ import com.vitorpamplona.quartz.nip01Core.relay.normalizer.NormalizedRelayUrl
 import com.vitorpamplona.quartz.nip01Core.store.FtsReindexProgress
 import com.vitorpamplona.quartz.nip01Core.store.IEventStore
 import com.vitorpamplona.quartz.nip01Core.store.IdAndTime
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.nip01Core.tags.dTag.dTag
 import com.vitorpamplona.quartz.nip09Deletions.DeletionEvent
 import com.vitorpamplona.quartz.nip40Expiration.isExpired
@@ -198,6 +199,13 @@ class NostrEventStore(
         val batchIds = events.map { it.id }
         val batchAddresses = events.mapNotNull { it.addressOrNull() }.distinct()
         val records = events.filter { it !is DeletionEvent && it !is RequestToVanishEvent }
+        // Only owners that provably HAVE a stored tombstone/vanish can guard this
+        // batch (GuardOwners) — for everyone else both probes come back empty, so
+        // skip them. A content batch touches ~500 owners but almost none are
+        // flagged, turning ~3 heavy queries/owner-chunk into zero. This is the same
+        // gate the per-event path (insertLocked) and the pure-record bulk path
+        // (BulkInsert.plan) already apply; the mixed path was missing it.
+        val guardedOwners = guards.filterFlagged(owners)
 
         val queries =
             buildList {
@@ -205,8 +213,8 @@ class NostrEventStore(
                 (batchIds + deletions.flatMap { it.deleteEventIds() }).distinct().chunked(PRELOAD_CHUNK).forEach { add(EventQuery(ids = it)) }
 
                 // Guards + immunity: the owners' stored tombstones (targeting this
-                // batch's ids/addresses) and their vanishes.
-                owners.chunked(PRELOAD_CHUNK).forEach { auth ->
+                // batch's ids/addresses) and their vanishes — only for flagged owners.
+                guardedOwners.chunked(PRELOAD_CHUNK).forEach { auth ->
                     if (batchIds.isNotEmpty()) add(EventQuery(kinds = listOf(DeletionEvent.KIND), authors = auth, tags = mapOf("e" to batchIds)))
                     if (batchAddresses.isNotEmpty()) add(EventQuery(kinds = listOf(DeletionEvent.KIND), authors = auth, tags = mapOf("a" to batchAddresses)))
                     add(EventQuery(kinds = listOf(RequestToVanishEvent.KIND), authors = auth))
@@ -240,7 +248,9 @@ class NostrEventStore(
                 vanishes.map { it.pubKey }.distinct().forEach { add(EventQuery(owners = listOf(it))) }
             }
 
-        queries.mapBounded(QUERY_FANOUT) { index.search(it) }.forEach { page -> page.forEach { snapshot.put(it) } }
+        com.vitorpamplona.quartz.eventstore.vespa.IngestStats.timed("preload") {
+            queries.mapBounded(QUERY_FANOUT) { index.search(it) }.forEach { page -> page.forEach { snapshot.put(it) } }
+        }
     }
 
     private suspend fun tryInsertLocked(event: Event): IEventStore.InsertOutcome =
@@ -298,13 +308,32 @@ class NostrEventStore(
             if (deleted?.await() == true) throw RejectedException(Rejections.DELETED)
             if (vanished?.await() == true) throw RejectedException(Rejections.VANISHED)
         }
-        when (event) {
-            is DeletionEvent -> applyDeletion(event)
-            is RequestToVanishEvent -> applyVanish(event)
-            else -> supersede(event)
+        when {
+            event is DeletionEvent -> {
+                applyDeletion(event)
+                index.put(event.toDoc())
+                guards.noteGuardStored(event.pubKey)
+            }
+
+            event is RequestToVanishEvent -> {
+                applyVanish(event)
+                index.put(event.toDoc())
+                guards.noteGuardStored(event.pubKey)
+            }
+
+            // Replaceable/addressable newest-wins in ONE call: address-keyed Vespa
+            // rejects a stale version server-side (conditionNotMet, no read); the
+            // default resolves it with the same (created_at, then lowest id) rule
+            // the old supersede()+put did. False == a same-or-newer version holds
+            // the address, so this insert is REPLACED.
+            event.kind.isReplaceable() || event.kind.isAddressable() -> {
+                if (!index.putIfNewer(event.toDoc())) throw RejectedException(Rejections.REPLACED)
+            }
+
+            else -> {
+                index.put(event.toDoc())
+            }
         }
-        index.put(event.toDoc())
-        if (event is DeletionEvent || event is RequestToVanishEvent) guards.noteGuardStored(event.pubKey)
     }
 
     // ---- queries ------------------------------------------------------------
@@ -343,6 +372,32 @@ class NostrEventStore(
             1 -> index.search(queries[0])
             else -> queries.mapBounded(QUERY_FANOUT) { index.search(it) }.flatten().distinctBy { it.id }
         }
+
+    /**
+     * Raw read path: recall matches as Quartz [RawEvent]s, skipping the per-hit
+     * tag parse and the Event object model that [query] builds. A relay serving
+     * REQs straight to the wire never needs the parsed tags — it re-serializes
+     * each event to JSON — so on the Vespa client this hands the stored tag
+     * string through untouched (see [EventIndex.rawSearch]). Same recall, expiry,
+     * dedup, and ordering as [query]; only the projection differs.
+     */
+    override suspend fun rawQuery(
+        filters: List<Filter>,
+        onEach: (RawEvent) -> Unit,
+    ) {
+        val observer = coroutineContext[ObserverContext]?.pubkey
+        val queries = restoreSearches(filters).mapNotNull { it.toExpiryQuery(observer) }
+        val raw =
+            when (queries.size) {
+                0 -> return
+                1 -> index.rawSearch(queries[0])
+                else -> queries.mapBounded(QUERY_FANOUT) { index.rawSearch(it) }.flatten().distinctBy { it.id }
+            }
+        // NIP-50 relevance order is preserved for searching queries, exactly as in [query].
+        val ranked = queries.any { it.search != null || it.ranking != null }
+        val ordered = if (ranked) raw else raw.sortedWith(RAW_NEWEST_FIRST)
+        ordered.forEach(onEach)
+    }
 
     override suspend fun <T : Event> query(
         filter: Filter,
@@ -508,50 +563,6 @@ class NostrEventStore(
     }
 
     /**
-     * Replaceable/addressable version resolution in ONE query. Fetch the stored
-     * versions once. If any of them wins the (created_at, lowest id wins ties)
-     * comparison, reject this insert. Otherwise delete the strictly-older ones it
-     * supersedes.
-     */
-    private suspend fun supersede(event: Event) {
-        val versions = currentVersions(event)
-        if (versions.any { it.createdAt > event.createdAt || (it.createdAt == event.createdAt && it.id < event.id) }) {
-            throw RejectedException(Rejections.REPLACED)
-        }
-        versions.forEach {
-            if (it.createdAt < event.createdAt || (it.createdAt == event.createdAt && it.id > event.id)) index.remove(it.id)
-        }
-    }
-
-    /**
-     * The stored versions sharing this event's replaceable address. Addressables
-     * compare d-tags doc-side (not via tag_index) so a missing d tag and an
-     * explicit empty one meet at the same address, per NIP-01.
-     */
-    private suspend fun currentVersions(event: Event): List<EventDoc> {
-        if (!event.kind.isReplaceable() && !event.kind.isAddressable()) return emptyList()
-        if (!event.kind.isAddressable()) {
-            // Replaceable: one address per (kind, author); the query is exact.
-            return index.search(EventQuery(kinds = listOf(event.kind), authors = listOf(event.pubKey)))
-        }
-        val d = event.tags.dTag()
-        // Constrain by d in the QUERY when it's present, so a prolific author's
-        // OTHER addresses of this kind don't push the target version past the
-        // 10k search page. Missing it would miss supersession — a real defect for
-        // trust providers with tens of thousands of 30382s. The empty/missing-d
-        // address can't use tag recall, so it keeps the broad (kind, author)
-        // query; an author with >10k empty-d addressables of one kind is not a
-        // real case. The doc-side d filter still normalizes missing == empty.
-        val docs =
-            if (d.isNullOrEmpty()) {
-                index.search(EventQuery(kinds = listOf(event.kind), authors = listOf(event.pubKey)))
-            } else {
-                index.search(EventQuery(kinds = listOf(event.kind), authors = listOf(event.pubKey), tags = mapOf("d" to listOf(d))))
-            }
-        return docs.filter { doc -> doc.dTagOrEmpty() == d }
-    }
-
-    /**
      * NIP-09 enforcement: erase this kind 5's targets — by id when the doc's
      * OWNER is the deletion author (a recipient deletes gift-wraps sent to
      * them), by address (addressable AND replaceable kinds) up to the
@@ -640,5 +651,8 @@ class NostrEventStore(
         // Ids/authors/d-tags per preload query — well under the engine's page cap.
         const val PRELOAD_CHUNK = 500
         val NEWEST_FIRST = compareByDescending(EventDoc::createdAt).thenBy(EventDoc::id)
+
+        /** [NEWEST_FIRST] for the raw read path — the same created_at desc, id asc order over [RawEvent]s. */
+        val RAW_NEWEST_FIRST = compareByDescending(RawEvent::createdAt).thenBy(RawEvent::id)
     }
 }

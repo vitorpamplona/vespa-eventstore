@@ -16,6 +16,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines)
     // The corpus generator builds canonical event JSON with the JsonElement tree API.
     implementation(libs.kotlinx.serialization.json)
+    // CondPutProbe drives the feed client directly to A/B server-side test-and-set
+    // (address-keyed conditional put) against the store's read-then-supersede.
+    implementation(libs.vespa.feed.client)
 
     // VespaParityIT stands up a real Vespa in a container and runs the parity
     // battery against it — the CI correctness gate. Skips when Docker is absent.
@@ -44,5 +47,13 @@ application {
 // (~2 GB) plus the SQLite stores' native memory. BENCH_HEAP sets -Xmx for the
 // benchmark JVM (default 2g keeps the everyday 30k run lean).
 tasks.named<JavaExec>("run") {
+    maxHeapSize = System.getenv("BENCH_HEAP") ?: "2g"
+}
+
+tasks.register<JavaExec>("traceProbe") {
+    group = "verification"
+    description = "Dump Vespa query-execution plans (trace.explainLevel) for the named REQ shapes"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.vitorpamplona.quartz.eventstore.benchmark.TraceProbe")
     maxHeapSize = System.getenv("BENCH_HEAP") ?: "2g"
 }

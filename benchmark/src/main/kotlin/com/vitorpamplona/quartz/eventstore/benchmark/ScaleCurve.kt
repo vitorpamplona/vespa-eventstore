@@ -61,6 +61,10 @@ object ScaleCurve {
         val sqlite = Backends.sqliteMemory()
         val vespa: IEventStore? = url?.let { VespaEventStore.open(it) }
         val engines = listOfNotNull("sqlite" to sqlite, vespa?.let { "vespa" to it })
+        // Warm each engine (feed+delete junk) so the FIRST checkpoint's ingest is
+        // steady state, not JIT warmup — otherwise the 25k point reads artificially
+        // low (cold) while later checkpoints are already warm from delta-feeding.
+        engines.forEach { (_, store) -> Warmup.warm(store) }
         val csv = StringBuilder("curve,size,engine,metric,value\n")
 
         fun emit(
@@ -91,7 +95,8 @@ object ScaleCurve {
                     Triple("author-timeline", 150) { s, i -> s.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50)) },
                     Triple("follow-feed(a300)", 40) { s, i -> s.query<Event>(Filter(authors = w.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500)) },
                     Triple("nip50-search", 30) { s, i -> s.query<Event>(Filter(kinds = listOf(1), search = w.term(i), limit = 50)) },
-                    Triple("id-lookup", 300) { s, i -> s.query<Event>(Filter(ids = listOf(w.id(i)))) },
+                    Triple("id-lookup(16)", 300) { s, i -> s.query<Event>(Filter(ids = w.idList(i, 16))) },
+                    Triple("id-lookup(256)", 120) { s, i -> s.query<Event>(Filter(ids = w.idList(i, 256))) },
                 )
             for ((name, store) in engines) {
                 for ((shape, reps, op) in shapes) {

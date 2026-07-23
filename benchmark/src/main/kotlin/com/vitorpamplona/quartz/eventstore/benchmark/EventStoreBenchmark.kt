@@ -121,10 +121,26 @@ object EventStoreBenchmark {
                 println(String.format("ingested %d events (batch %d) in %.1fs = %.0f events/sec", n, batch, secs, n / secs))
                 println(
                     com.vitorpamplona.quartz.eventstore.vespa.IngestStats
-                        .gauge(),
+                        .dump(),
                 )
                 println(store.feedGauge())
             }
+            return
+        }
+
+        // Replaceable/draft-churn A/B: client read-then-supersede vs Vespa's
+        // server-side test-and-set (address-keyed conditional put).
+        if (System.getenv("BENCH_CONDPUT") != null) {
+            requireNotNull(vespaUrl) { "BENCH_CONDPUT needs BENCH_VESPA_URL" }
+            CondPutProbe.run(vespaUrl, seed)
+            return
+        }
+
+        // Live end-to-end check of the address-keyed store path (run with
+        // VESPA_ADDRESS_KEYED=1): newest-wins, dual id+address addressing, reject-stale.
+        if (System.getenv("BENCH_ADDR_SMOKE") != null) {
+            requireNotNull(vespaUrl) { "BENCH_ADDR_SMOKE needs BENCH_VESPA_URL" }
+            AddrSmokeProbe.run(vespaUrl)
             return
         }
 
@@ -140,6 +156,26 @@ object EventStoreBenchmark {
         // both engines and measure at each checkpoint (see ScaleCurve).
         if (System.getenv("BENCH_SCALE_CURVE") != null) {
             ScaleCurve.run(vespaUrl, seed)
+            return
+        }
+
+        // Concurrent-writer ingest A/B: N publishers batchInsert at once, SQLite's
+        // single writer vs the Vespa feed client's many-in-flight (see ConcurrentIngest).
+        if (System.getenv("BENCH_CONCURRENT_INGEST") != null) {
+            ConcurrentIngest.run(vespaUrl, seed)
+            return
+        }
+
+        // Pure index-write probe: feed docs straight through VespaEventIndex against
+        // whatever schema is deployed, to isolate index-build cost (see SchemaIngestProbe).
+        if (System.getenv("BENCH_SCHEMA_INGEST") != null) {
+            SchemaIngestProbe.main(emptyArray())
+            return
+        }
+
+        // id-lookup fan-out sweep: N ids per REQ across the fast-path threshold (see IdLookupProbe).
+        if (System.getenv("BENCH_ID_LOOKUP") != null) {
+            IdLookupProbe.run(vespaUrl, seed)
             return
         }
 
@@ -281,6 +317,9 @@ object EventStoreBenchmark {
         batch: Int,
         factory: () -> IEventStore,
     ) = runBlocking {
+        // Warm the JVM for this backend (throwaway store) so the timed inserts below
+        // are steady state, not JIT warmup — see Warmup.
+        Warmup.warmVia(factory = factory)
         // Per-event insert() measured AT CORPUS SCALE: preload everything but a
         // probe tail via the bulk path, then time per-event inserts on top —
         // the same shape as the real-Vespa probe. Per-event-inserting the FULL
@@ -332,7 +371,7 @@ object EventStoreBenchmark {
         query("author-timeline", reps) { i -> store.query<Event>(Filter(authors = listOf(workload.author(i)), limit = 50)) }
         query("kind-scan(notes)", reps) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)) }
         query("tag-mentions(p)", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(workload.author(i))), limit = 50)) }
-        query("id-lookup", reps) { i -> store.query<Event>(Filter(ids = listOf(workload.id(i)))) }
+        query("id-lookup(16)", reps) { i -> store.query<Event>(Filter(ids = workload.idList(i, 16))) }
         query("profile(kind0)", reps) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(workload.author(i)), limit = 1)) }
         query("count(reactions)", reps) { store.count(Filter(kinds = listOf(7))) }
         query("nip50-search", reps) { i -> store.query<Event>(Filter(kinds = listOf(1), search = workload.term(i), limit = 50)) }

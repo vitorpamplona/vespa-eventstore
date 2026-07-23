@@ -21,6 +21,8 @@
 package com.vitorpamplona.quartz.eventstore.vespa.client
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
+import com.vitorpamplona.quartz.nip01Core.core.isAddressable
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 
 /**
  * The engine port an event store talks to: document-keyed get/put/remove plus
@@ -35,6 +37,18 @@ import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
  * query-then-write semantics sound under a single writer.
  */
 interface EventIndex : AutoCloseable {
+    /**
+     * When true, replaceable/addressable supersession is enforced by the engine
+     * via [putIfNewer] (an address-keyed conditional put) rather than the client
+     * reading the current versions first. The bulk path checks this to skip its
+     * version-read stage. Default false — the read-then-supersede behavior.
+     *
+     * A decorator that REACTS to writes (e.g. the trust projection) intentionally
+     * keeps this false so supersession stays read-based and its react hooks see
+     * both the old and new versions; see [putIfNewer].
+     */
+    val supersedesViaPut: Boolean get() = false
+
     suspend fun get(id: String): EventDoc?
 
     suspend fun put(doc: EventDoc)
@@ -53,6 +67,21 @@ interface EventIndex : AutoCloseable {
 
     /** Docs matching [query]: newest first (`created_at` desc, id asc tiebreak) unless ranked by a search term. */
     suspend fun search(query: EventQuery): List<EventDoc>
+
+    /**
+     * The same recall as [search], but each match projected to a Quartz
+     * [RawEvent] — the wire event with `tags` kept as its canonical JSON string.
+     * This is the read path a relay serves straight to a client: it never needs
+     * the per-tag object model [EventDoc] carries, so a raw path can hand each
+     * hit's `tags` through verbatim rather than parse-then-re-serialize it.
+     *
+     * The default rides [search] and re-serializes each doc's tags, which keeps
+     * the in-memory reference correct. The real Vespa client overrides it to
+     * build the [RawEvent] from the decoded summary directly, so a hit's tag
+     * string is decoded once off the wire and passed straight through — no
+     * [EventDoc], no tag parse. Ordering matches [search].
+     */
+    suspend fun rawSearch(query: EventQuery): List<RawEvent> = search(query).map { it.toRawEvent() }
 
     /**
      * Stream EVERY match's (id, created_at). This is the full-corpus walk
@@ -108,7 +137,70 @@ interface EventIndex : AutoCloseable {
      * ride the capped search.
      */
     suspend fun distinctAuthors(query: EventQuery): Set<String> = search(query).mapTo(HashSet()) { it.pubkey }
+
+    /**
+     * Every distinct author of [query]'s match set, EXHAUSTIVELY — unlike
+     * [distinctAuthors], whose server-side grouping caps at
+     * `EventYql.MAX_AUTHOR_GROUPS`. The guard-owner preload needs completeness,
+     * not a sample: a missed author would be a false negative in the guard
+     * filter (a skipped-but-needed tombstone probe). The default rides the
+     * uncapped in-memory [distinctAuthors]; the real client overrides it with a
+     * continuation-paged visit so it never silently truncates. A decorator MUST
+     * delegate to its inner index, not this default.
+     */
+    suspend fun scanAuthors(query: EventQuery): Set<String> = distinctAuthors(query)
+
+    /**
+     * Store [doc] IFF it wins its NIP-01 address (highest `created_at`; ties
+     * broken by the LOWEST id) — replaceable/addressable supersession as a single
+     * call. Returns true when [doc] was stored (and any older version at the
+     * address removed), false when a same-or-newer version already held it.
+     * Non-replaceable docs are stored unconditionally (true).
+     *
+     * The default realizes it the obvious way — search the address, compare,
+     * supersede — which is what the in-memory reference and today's store do, so
+     * outcomes match the per-event rules exactly. The real client OVERRIDES it
+     * with an address-keyed conditional put, letting the engine enforce
+     * newest-wins atomically and reject stale versions server-side with no read.
+     *
+     * A REACTING decorator (the trust projection) does the opposite of the pure
+     * read paths: it must RIDE this default rather than forward to inner, because
+     * the default supersedes through the decorator's own [put]/[remove] — firing
+     * its reactions for the removed old version AND the new one. The engine's
+     * atomic conditional put exposes neither the old doc nor the fact that it also
+     * keeps [supersedesViaPut] false there.
+     */
+    suspend fun putIfNewer(doc: EventDoc): Boolean {
+        val address =
+            doc.addressOrNull() ?: run {
+                put(doc)
+                return true
+            }
+        val dTag = doc.dTagOrEmpty()
+        val q =
+            // Addressable with a non-empty d: narrow by d so a prolific author's
+            // other addresses of this kind don't push the target past the search
+            // page. Replaceable, or addressable with an empty/missing d (nothing to
+            // recall on), stay broad by (kind, author) — the addressOrNull filter
+            // below is the exact match and normalizes missing == empty d.
+            if (doc.kind.isAddressable() && dTag.isNotEmpty()) {
+                EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey), tags = mapOf("d" to listOf(dTag)))
+            } else {
+                EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey))
+            }
+        val existing = search(q).filter { it.addressOrNull() == address }
+        val incumbent = existing.minWithOrNull(REPLACEABLE_WINNER)
+        // Incumbent wins or is identical -> reject the incoming (stale) version.
+        if (incumbent != null && REPLACEABLE_WINNER.compare(doc, incumbent) >= 0) return false
+        existing.forEach { remove(it.id) }
+        put(doc)
+        return true
+    }
 }
+
+/** NIP-01 replaceable winner order: newest `created_at` first, ties to the LOWEST id. */
+internal val REPLACEABLE_WINNER: Comparator<EventDoc> =
+    compareByDescending<EventDoc> { it.createdAt }.thenBy { it.id }
 
 /** The (id, created_at[, d tag]) projection [EventIndex.visitIds] streams — all a sync diff or projection walk needs. */
 data class DocRef(

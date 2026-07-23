@@ -66,6 +66,9 @@ object VespaRunner {
 
             // --- bulk ingest (the path the framework is built around) ---
             if (!skipIngest) {
+                // Warm the engine's jdisc JIT (feed+delete junk) so the ingest rate
+                // below is steady state, not the ~30s first-feed compile wave — see Warmup.
+                Warmup.warm(store)
                 println("ingesting ${corpus.size} events via batchInsert($batch) ...")
                 val ingestNanos =
                     measureNanoTime {
@@ -95,7 +98,7 @@ object VespaRunner {
             timeQuery("author-timeline", queries) { i -> store.query<Event>(Filter(authors = listOf(w.author(i)), limit = 50)) }
             timeQuery("kind-scan(notes)", queries) { store.query<Event>(Filter(kinds = listOf(1), limit = 200)) }
             timeQuery("tag-mentions(p)", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), tags = mapOf("p" to listOf(w.author(i))), limit = 50)) }
-            timeQuery("id-lookup", queries) { i -> store.query<Event>(Filter(ids = listOf(w.id(i)))) }
+            timeQuery("id-lookup(16)", queries) { i -> store.query<Event>(Filter(ids = w.idList(i, 16))) }
             timeQuery("profile(kind0)", queries) { i -> store.query<Event>(Filter(kinds = listOf(0), authors = listOf(w.author(i)), limit = 1)) }
             timeQuery("count(reactions)", queries) { store.count(Filter(kinds = listOf(7))) }
             timeQuery("nip50-search", queries) { i -> store.query<Event>(Filter(kinds = listOf(1), search = w.term(i), limit = 50)) }

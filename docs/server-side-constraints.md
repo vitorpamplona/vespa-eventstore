@@ -15,7 +15,7 @@ mechanisms that between them cover most of the admission logic. Mapping:
 |---|---|---|---|
 | `expires_at` sweep (client) | NIP-40 expiry | **GC selection** (`selection="event.expires_at > now()"`) | **SHIPPED** — validated live |
 | `UNIQUE (id)` | duplicate insert | docid identity + **test-and-set** insert-if-absent | **MEASURED, NOT SHIPPED** — slower (below) |
-| `UNIQUE (kind, pubkey[, d_tag])` + replace | replaceable/addressable supersession | **address-keyed docid + test-and-set condition** | design below |
+| `UNIQUE (kind, pubkey[, d_tag])` + replace | replaceable/addressable supersession | **address-keyed docid + test-and-set condition** | **SHIPPED, opt-in** (`VESPA_ADDRESS_KEYED`) — 3.2× on draft churn (below) |
 | trigger-like module (`DeletionRequestModule`) | NIP-09 tombstone block | **document processor** (custom Java in the container) | roadmap |
 | trigger-like module (`RightToVanishModule`) | NIP-62 vanish block | **document processor** | roadmap |
 
@@ -73,17 +73,47 @@ atomically. Two admission rules fit inside it:
   (`BENCH_INSERT_PROBE`) and the duplicate-reinsert benchmark case remain for
   re-testing on future engine versions or multi-node clusters (where a
   client↔cluster round trip costs more and the trade could flip).
-- **Supersession, if replaceables were keyed by address.** Today every doc's
-  id is the event id, so replacing kind 0/3/10002/3xxxx requires a search for
-  the incumbent + a remove + a put. If replaceable/addressable events used
-  `kind:pubkey[:dtag]` as their **docid**, supersession would become a single
-  conditional put: `condition = "event.created_at < X or (event.created_at ==
-  X and event.id > 'newid')"` — the NIP-01 newest-wins rule with the lexical
-  tiebreak, enforced atomically by the engine, older-version inserts rejected
-  for free. Cost: a docid-scheme split (regular events by id, replaceables by
-  address), which touches dedup, deletion-by-id, and reconstruction — a real
-  refactor, worth it only if replaceable churn ever dominates ingest (it is
-  ~9% of the corpus mix today, and the batch path already amortizes it).
+- **Supersession by address-keyed conditional put — SHIPPED, opt-in
+  (`VESPA_ADDRESS_KEYED=1`).** By default every doc's id is the event id, so
+  replacing kind 0/3/10002/3xxxx searches for the incumbent + removes + puts
+  (the read-then-supersede path). Under the flag, replaceable/addressable
+  events instead use their NIP-01 address `kind:pubkey[:dtag]` as the **docid**,
+  and supersession becomes a single conditional put:
+
+  ```
+  condition = "event.created_at < X or (event.created_at == X and event.id > 'newid')"
+  ```
+
+  — the NIP-01 newest-wins rule with the lexical tiebreak, enforced atomically
+  by the engine with no client read; stale versions come back `conditionNotMet`
+  and are rejected for free. Regular events stay id-keyed; id lookups route
+  through the `id`-attribute search so both addressing schemes resolve. The
+  refactor it costs (a docid-scheme split touching dedup, deletion-by-id, and
+  reconstruction) is contained behind [`EventIndex.putIfNewer`]: the default
+  implementation is read-then-supersede (what the store and reference use), and
+  `VespaEventIndex` overrides it with the conditional put when the flag is on.
+
+  **Measured (draft-churn A/B, `BENCH_CONDPUT`, this box):** 5,000 addressable
+  draft addresses, 60,000 saves, 69% of them stale resends below the running
+  head (the "clients re-saving every 2s" flood).
+
+  | arm | throughput | wall |
+  |---|---:|---|
+  | A) read-then-supersede (default) | 599 ev/s | 100.2 s |
+  | B) conditional put (address-keyed) | **1,940 ev/s** | 30.9 s — 50,478 stale rejected server-side |
+
+  **B/A = 3.24×.** The win is exactly the stale flood: each stale resend costs
+  the read path a supersession search, but costs the conditional put one
+  rejected write with no read. It is a real refactor, worth enabling only where
+  replaceable/draft churn dominates ingest (~9% of this corpus mix; the batch
+  path already amortizes the read path's searches).
+
+  Scope note: the fast path engages on the raw `VespaEventIndex`. Through the
+  production trust-projection decorator, supersession deliberately stays
+  read-based so the projection's write reactions still see both the superseded
+  and the new version (the atomic conditional put never exposes the removed
+  doc); see `TrustProjection`. `BENCH_ADDR_SMOKE` is the live end-to-end
+  correctness smoke for the flag (dual id+address addressing, reject-stale).
 
 The limitation that shapes everything: **a condition can only see the one
 document it addresses.** No condition can ask "does a kind-5 by this author
@@ -125,6 +155,6 @@ deleter densities) with single-stream latency unchanged — the win is engine
 read capacity under load. The docproc bundle remains the right tool when the
 goal is ENFORCEMENT for multi-feeder deployments (it is the only mechanism
 that guards writes this store never sees); as a pure performance lever it is
-now largely superseded. Address-keyed replaceables stay a refactor-scale
-option; the test-and-set dup fold is measured out at single-node scale
-(table above).
+now largely superseded. Address-keyed replaceables are now **shipped opt-in**
+(`VESPA_ADDRESS_KEYED`, 3.24× on draft churn, §2); the test-and-set dup fold is
+measured out at single-node scale (table above).

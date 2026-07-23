@@ -23,6 +23,7 @@ import ai.vespa.feed.client.DocumentId
 import ai.vespa.feed.client.FeedClient
 import ai.vespa.feed.client.FeedClientBuilder
 import ai.vespa.feed.client.OperationParameters
+import ai.vespa.feed.client.Result
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.doc.SearchFields
 import com.vitorpamplona.quartz.eventstore.vespa.mapBounded
@@ -30,9 +31,11 @@ import com.vitorpamplona.quartz.eventstore.vespa.query.EventQuery
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventSelection
 import com.vitorpamplona.quartz.eventstore.vespa.query.EventYql
 import com.vitorpamplona.quartz.eventstore.vespa.query.VespaQuery
+import com.vitorpamplona.quartz.nip01Core.store.RawEvent
 import com.vitorpamplona.quartz.utils.Hex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -48,13 +51,21 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.net.Proxy
 import java.net.URI
 import java.net.URLEncoder
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.time.Duration
-import java.util.concurrent.Executors
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * The real [EventIndex]: Vespa over HTTP. Writes go through Vespa's official
@@ -128,25 +139,65 @@ class VespaEventIndex(
                 },
             ).build()
 
+    // Read client. OkHttp pinned to clear-text HTTP/2 by PRIOR KNOWLEDGE: Vespa's
+    // container serves h2c only via prior knowledge, not the `Upgrade: h2c`
+    // handshake the JDK HttpClient uses — so the JDK client silently ran every
+    // query on HTTP/1.1 (one TCP connection per in-flight read). Prior-knowledge
+    // h2c makes concurrent reads multiplex over a single connection, matching the
+    // feed client's write path. No fallback list: every endpoint here is Vespa.
     private val http =
-        HttpClient
-            .newBuilder()
+        OkHttpClient
+            .Builder()
+            .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
             .connectTimeout(Duration.ofSeconds(5))
+            .readTimeout(Duration.ofSeconds(60))
+            .writeTimeout(Duration.ofSeconds(60))
             // Vespa is local; never route through the egress proxy.
-            .proxy(java.net.ProxySelector.of(null))
-            .executor(Executors.newVirtualThreadPerTaskExecutor())
+            .proxy(Proxy.NO_PROXY)
             .build()
 
+    private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+    // ADDRESS-KEYED mode (VESPA_ADDRESS_KEYED=1): replaceable/addressable events
+    // are stored under their NIP-01 address as the document id, so the engine
+    // enforces newest-wins with a conditional put (see [putIfNewer]) instead of
+    // the client's read-then-supersede. Regular events stay id-keyed. Default OFF
+    // — the whole scheme is opt-in until measured. When ON, id lookups can no
+    // longer ride the document-API get (replaceables live under an address docid),
+    // so they route through the `id`-attribute search, which finds both.
+    private val addressKeyed = System.getenv("VESPA_ADDRESS_KEYED")?.toBooleanStrictOrNull() ?: false
+
+    // Under address-keying the engine enforces newest-wins (conditional put), so
+    // the bulk path skips its version-read stage and calls putIfNewer instead.
+    override val supersedesViaPut: Boolean get() = addressKeyed
+
+    /** The document id for [doc]: its address when address-keyed and replaceable, else its event id. */
+    private fun docIdOf(doc: EventDoc): String = if (addressKeyed) doc.addressOrNull() ?: doc.id else doc.id
+
     override suspend fun get(id: String): EventDoc? {
+        // Address-keyed replaceables aren't at the id docid; resolve by the id
+        // attribute instead (finds regular AND replaceable, no doc-API get).
+        if (addressKeyed) return searchById(id)
         val resp = send("${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
         if (resp.statusCode() == 404) return null
         require(resp.statusCode() < 400) { "vespa get ${resp.statusCode()}: ${resp.body().take(300)}" }
         return DECODER.decodeFromString<DocEnvelope>(resp.body()).fields?.toDoc()
     }
 
+    /** One doc by its `id` attribute via the search stack — the id-lookup path under address-keying (no doc-API get, no [getByIds] recursion). */
+    private suspend fun searchById(id: String): EventDoc? {
+        val vq = EventYql.build(EventQuery(ids = listOf(id))) ?: return null
+        return DECODER
+            .decodeFromString<SearchEnvelope>(queryBody(vq, hits = 1))
+            .root.children
+            .firstOrNull()
+            ?.fields
+            ?.toDoc()
+    }
+
     private fun putOp(doc: EventDoc) =
         feed.put(
-            DocumentId.of(NAMESPACE, DOCTYPE, doc.id),
+            DocumentId.of(NAMESPACE, DOCTYPE, docIdOf(doc)),
             buildJsonObject { put("fields", doc.indexFields()) }.toString(),
             feedParams(),
         )
@@ -162,12 +213,55 @@ class VespaEventIndex(
         docs.map { putOp(it) }.forEach { it.await() }
     }
 
+    /**
+     * Address-keyed newest-wins as a single server-side conditional put: create if
+     * absent, else overwrite only when the incoming version beats the stored one
+     * (higher created_at, or same created_at and a LOWER id — NIP-01). Stale
+     * versions come back `conditionNotMet` (rejected by the engine, no client
+     * read). Falls back to the search-then-supersede default when address-keying
+     * is off or the doc is not replaceable.
+     */
+    override suspend fun putIfNewer(doc: EventDoc): Boolean {
+        val address = doc.addressOrNull()
+        if (!addressKeyed || address == null) return super.putIfNewer(doc)
+        val condition =
+            "event.created_at < ${doc.createdAt} or " +
+                "(event.created_at == ${doc.createdAt} and event.id > \"${doc.id}\")"
+        val result =
+            feed
+                .put(
+                    DocumentId.of(NAMESPACE, DOCTYPE, address),
+                    buildJsonObject { put("fields", doc.indexFields()) }.toString(),
+                    feedParams().createIfNonExistent(true).testAndSetCondition(condition),
+                ).await()
+        // success = stored (created or newest-wins overwrite); conditionNotMet =
+        // a same-or-newer version already held the address, so [doc] is stale.
+        // A transport/engine failure completes the future exceptionally (never a
+        // Result here), so the else guards only a future enum addition.
+        return when (result.type()) {
+            Result.Type.success -> true
+            Result.Type.conditionNotMet -> false
+            else -> error("vespa conditional put for $address returned ${result.type()}")
+        }
+    }
+
     override suspend fun remove(id: String) {
-        removeOp(id).await()
+        // Under address-keying the doc may live at an address docid, so resolve it
+        // (regular -> id docid, replaceable -> address docid) before removing.
+        val docId = if (addressKeyed) get(id)?.let { docIdOf(it) } ?: id else id
+        feed.remove(DocumentId.of(NAMESPACE, DOCTYPE, docId), feedParams()).await()
     }
 
     /** All removes in flight together over HTTP/2, like [putAll]. */
     override suspend fun removeAll(ids: List<String>) {
+        // Address-keyed replaceables live at an address docid, not their event id,
+        // so a raw removeOp(id) would silently miss them. Resolve each the way
+        // remove() does (get -> docIdOf), bounded-concurrent. Regular events are
+        // id-keyed and just pipeline by id.
+        if (addressKeyed) {
+            ids.mapBounded(ID_GET_FANOUT) { remove(it) }
+            return
+        }
         ids.map { removeOp(it) }.forEach { it.await() }
     }
 
@@ -191,6 +285,23 @@ class VespaEventIndex(
     }
 
     /**
+     * Raw recall: decode each hit straight to a [RawEvent], keeping `tags` as the
+     * stored JSON string. This skips the one field [toDoc] still parses per hit
+     * AND the EventDoc/Event object model — the relay read path splices that tag
+     * string straight onto the wire, so parsing then re-serializing it is pure
+     * waste that scales with result size. The pure-id fast path has no summary to
+     * decode (it gets documents), so it reuses [getByIds] and projects the docs.
+     */
+    override suspend fun rawSearch(query: EventQuery): List<RawEvent> {
+        if (query.isPureIdLookup()) return getByIds(query).map { it.toRawEvent() }
+        val vq = EventYql.build(query) ?: return emptyList()
+        return DECODER
+            .decodeFromString<SearchEnvelope>(queryBody(vq, hits = query.limit ?: maxHits))
+            .root.children
+            .mapNotNull { it.fields?.toRaw() }
+    }
+
+    /**
      * Only ids constrain the query (an expiry guard may still ride along), and few
      * enough to resolve in a single concurrent get wave — the direct-lookup fast
      * path. The size cap matters: above it, ONE `id in (…)` search is a single
@@ -198,7 +309,8 @@ class VespaEventIndex(
      * chunks) must stay on the search path or ingest would collapse.
      */
     private fun EventQuery.isPureIdLookup(): Boolean =
-        ids.isNotEmpty() && ids.size <= ID_GET_FANOUT &&
+        !addressKeyed && // address-keyed replaceables aren't at the id docid — route ids through search
+            ids.isNotEmpty() && ids.size <= ID_GET_FANOUT &&
             kinds.isEmpty() && notKinds.isEmpty() && authors.isEmpty() && owners.isEmpty() &&
             tags.isEmpty() && tagsAll.isEmpty() &&
             since == null && until == null && expiresBefore == null &&
@@ -367,6 +479,37 @@ class VespaEventIndex(
     }
 
     /**
+     * Complete author scan via the document-API visit (continuation-paged, no
+     * result cap), projecting only `pubkey`. Unlike [distinctAuthors]'s grouping
+     * this never truncates at `MAX_AUTHOR_GROUPS`, which is exactly what the
+     * guard-owner Bloom preload needs — a missed author would be a false negative.
+     */
+    override suspend fun scanAuthors(query: EventQuery): Set<String> {
+        val selection = EventSelection.build(query) ?: return super.scanAuthors(query)
+        val fieldSet = "$DOCTYPE:pubkey"
+        val base =
+            "${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid" +
+                "?selection=${URLEncoder.encode(selection, "UTF-8")}" +
+                "&wantedDocumentCount=$VISIT_PAGE&fieldSet=${URLEncoder.encode(fieldSet, "UTF-8")}"
+        val authors = HashSet<String>()
+        var continuation: String? = null
+        while (true) {
+            val resp = send(continuation?.let { "$base&continuation=$it" } ?: base)
+            require(resp.statusCode() < 400) { "vespa visit ${resp.statusCode()}: ${resp.body().take(300)}" }
+            val json = Json.parseToJsonElement(resp.body()).jsonObject
+            json["documents"]?.jsonArray?.forEach { d ->
+                d.jsonObject["fields"]
+                    ?.jsonObject
+                    ?.get("pubkey")
+                    ?.jsonPrimitive
+                    ?.content
+                    ?.let { authors += it }
+            }
+            continuation = json["continuation"]?.jsonPrimitive?.content ?: return authors
+        }
+    }
+
+    /**
      * POST [vq] to `/search/` and return the raw response body. POSTs because a
      * filter with hundreds of ids or authors builds YQL far past any sane URL
      * length. The recall path ([search]) streams this straight into typed docs;
@@ -384,11 +527,10 @@ class VespaEventIndex(
                 vq.params.forEach { (k, v) -> put(k, v) }
             }.toString()
         val req =
-            HttpRequest
-                .newBuilder(URI.create("${endpoint()}/search/"))
-                .timeout(Duration.ofSeconds(60))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
+            Request
+                .Builder()
+                .url("${endpoint()}/search/")
+                .post(body.toRequestBody(jsonMedia))
                 .build()
         // A busy engine sheds load transiently (504 "Summary data is
         // incomplete" under heavy concurrent summary fills). One failed page
@@ -425,12 +567,23 @@ class VespaEventIndex(
         )
     }
 
-    private suspend fun send(url: String): HttpResponse<String> =
+    /**
+     * The summary as a [RawEvent] with NO tag parse: `tags` rides through as the
+     * exact JSON string Vespa stored (`[["p","…"],…]`), which is precisely what a
+     * relay's serializer splices after `"tags":`. This is the whole raw-recall
+     * win — the tag column is never turned into per-tag objects and back.
+     */
+    private fun VespaSummary.toRaw(): RawEvent? {
+        if (id.isEmpty()) return null
+        return RawEvent(id, pubkey, createdAt, kind, tags, content, sig)
+    }
+
+    private suspend fun send(url: String): HttpResp =
         sendRetrying(
-            HttpRequest
-                .newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(30))
-                .GET()
+            Request
+                .Builder()
+                .url(url)
+                .get()
                 .build(),
         )
 
@@ -441,15 +594,53 @@ class VespaEventIndex(
      * query, get, and visit paths. The full-corpus visit walk is exactly a place
      * where one 504/429 page must not abort the whole scan.
      */
-    private suspend fun sendRetrying(req: HttpRequest): HttpResponse<String> {
-        var resp = http.sendAsync(req, HttpResponse.BodyHandlers.ofString()).await()
+    private suspend fun sendRetrying(req: Request): HttpResp {
+        var resp = http.newCall(req).await()
         var attempt = 0
         while ((resp.statusCode() in 500..599 || resp.statusCode() == 429) && attempt++ < QUERY_RETRIES) {
             delay(500L * attempt)
-            resp = http.sendAsync(req, HttpResponse.BodyHandlers.ofString()).await()
+            resp = http.newCall(req).await()
         }
         return resp
     }
+
+    /** Minimal response holder so the get/search/visit/count call sites keep their JDK-style statusCode()/body() shape. */
+    private class HttpResp(
+        private val code: Int,
+        private val bodyText: String,
+    ) {
+        fun statusCode() = code
+
+        fun body() = bodyText
+    }
+
+    /**
+     * Bridge OkHttp's async [Call.enqueue] to a cancellable suspend. The body is
+     * read on OkHttp's callback thread (inside [Response.use] so the connection is
+     * released), so the whole read stays non-blocking, exactly as the old
+     * `sendAsync(...).await()` did.
+     */
+    private suspend fun Call.await(): HttpResp =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { runCatching { cancel() } }
+            enqueue(
+                object : Callback {
+                    override fun onFailure(
+                        call: Call,
+                        e: IOException,
+                    ) {
+                        if (!cont.isCancelled) cont.resumeWithException(e)
+                    }
+
+                    override fun onResponse(
+                        call: Call,
+                        response: Response,
+                    ) {
+                        response.use { cont.resume(HttpResp(it.code, it.body.string())) }
+                    }
+                },
+            )
+        }
 
     /**
      * One-line feed-client health for status lines: cumulative acks, the LIVE

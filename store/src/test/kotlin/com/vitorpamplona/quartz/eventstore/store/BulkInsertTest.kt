@@ -80,8 +80,9 @@ class BulkInsertTest {
     private fun assertBulkMatchesSequential(
         prelude: List<Event> = emptyList(),
         batch: List<Event>,
+        bulkSupersedesViaPut: Boolean = false,
     ) = runBlocking {
-        val bulkIndex = InMemoryEventIndex()
+        val bulkIndex = InMemoryEventIndex(supersedesViaPut = bulkSupersedesViaPut)
         val bulkStore = NostrEventStore(bulkIndex, relay = relayUrl)
         prelude.forEach { bulkStore.insert(it) }
         val bulkOutcomes = bulkStore.batchInsert(batch)
@@ -140,6 +141,33 @@ class BulkInsertTest {
         assertBulkMatchesSequential(
             prelude = listOf(stored),
             batch = padding(14) + listOf(card(subject, at = 400), card(subject, at = 600)),
+        )
+    }
+
+    // The putIfNewer bulk branch (address-keyed engine) must produce the SAME
+    // outcomes as the read-then-supersede path — including the tricky cases where
+    // a run supersedes in place and where the whole address loses to a stored version.
+    @Test
+    fun `putIfNewer bulk branch resolves in-run supersession like the read path`() {
+        val subject = "7d".repeat(32)
+        assertBulkMatchesSequential(batch = padding(14) + listOf(card(subject, at = 100), card(subject, at = 200)) + listOf(card(subject, at = 50)), bulkSupersedesViaPut = true)
+        assertBulkMatchesSequential(batch = padding(14) + listOf(card(subject, at = 300), card(subject, at = 250)), bulkSupersedesViaPut = true)
+    }
+
+    @Test
+    fun `putIfNewer bulk branch loses the whole address to a stored newer version`() {
+        val subject = "6c".repeat(32)
+        // stored@500 beats both batch versions -> both rejected, even the in-run winner.
+        assertBulkMatchesSequential(
+            prelude = listOf(card(subject, at = 500)),
+            batch = padding(14) + listOf(card(subject, at = 400), card(subject, at = 450)),
+            bulkSupersedesViaPut = true,
+        )
+        // stored@500 loses to a newer batch version -> newest stored.
+        assertBulkMatchesSequential(
+            prelude = listOf(card(subject, at = 500)),
+            batch = padding(14) + listOf(card(subject, at = 400), card(subject, at = 600)),
+            bulkSupersedesViaPut = true,
         )
     }
 
