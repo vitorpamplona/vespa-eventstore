@@ -281,11 +281,15 @@ Read:
   not the table size. Isolated on the 400k store (single-threaded client): a
   256-id query spends ~7 ms matching (parse + `id in (…)` dictionary probes,
   17 KB of query text and all) and ~16 ms fetching the ~238 matched docs' summary
-  — the fetch is the lever, not the id encoding. Blowing the query text up 52×
-  (4 → 256 ids) added only ~1.7 ms, so **pre-hashing ids to shorten the request
-  buys < 1 ms of ~24 ms** (the id is already a 32-byte hash Vespa re-hashes into
-  its `dictionary { hash }` attribute; folding it shorter would also reintroduce
-  collision risk on an exact-match key). The real levers for a large id-set are
+  — the fetch is the lever, not the id encoding. The query text *is* double-parsed
+  (jdisc JSON → YQL AST, then messagebus protobuf → proton), but that cost is
+  per-**term**, not per-byte: at a fixed 256 terms, shrinking each id 64→16 hex
+  (a collision-safe 64-bit fold, 17 KB → 4.9 KB) moved the query only ~0.7 ms
+  (6.7 → 6.0 ms, at the box's noise floor), while the 256 AST nodes / messagebus
+  items / dictionary probes stay fixed. So **pre-hashing ids buys < 1 ms of the
+  ~24–27 ms query (~3%)** — and the id is already a 32-byte hash Vespa re-hashes
+  into its `dictionary { hash }` attribute, so folding it shorter only reintroduces
+  collision risk on an exact-match key. The real levers for a large id-set are
   parallel `document/v1` GETs by primary key (what `ID_GET_FANOUT` already does
   ≤32 ids) and a leaner summary — both attack the fetch, not the id string.
 
