@@ -21,6 +21,7 @@
 package com.vitorpamplona.quartz.eventstore.store
 
 import com.vitorpamplona.quartz.eventstore.vespa.IngestStats
+import com.vitorpamplona.quartz.eventstore.vespa.PUT_FANOUT
 import com.vitorpamplona.quartz.eventstore.vespa.QUERY_FANOUT
 import com.vitorpamplona.quartz.eventstore.vespa.client.EventIndex
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
@@ -233,7 +234,9 @@ internal class BulkInsert(
             // the previous). Replaceable winners are written by putIfNewer itself;
             // toPut carries only the regular events.
             IngestStats.timed("versions") {
-                groups.entries.toList().mapBounded(QUERY_FANOUT) { (_, idxs) ->
+                // Conditional puts are writes — fan out much wider than QUERY_FANOUT
+                // (which is capped for searches) so they pipeline like the raw feed.
+                groups.entries.toList().mapBounded(PUT_FANOUT) { (_, idxs) ->
                     for (i in idxs) {
                         if (!index.putIfNewer(events[i].toDoc())) {
                             outcome[i] = IEventStore.InsertOutcome.Rejected(Rejections.REPLACED)
