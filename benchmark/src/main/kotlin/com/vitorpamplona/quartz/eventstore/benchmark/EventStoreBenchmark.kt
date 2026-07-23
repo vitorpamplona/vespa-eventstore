@@ -136,6 +136,14 @@ object EventStoreBenchmark {
             return
         }
 
+        // Live end-to-end check of the address-keyed store path (run with
+        // VESPA_ADDRESS_KEYED=1): newest-wins, dual id+address addressing, reject-stale.
+        if (System.getenv("BENCH_ADDR_SMOKE") != null) {
+            requireNotNull(vespaUrl) { "BENCH_ADDR_SMOKE needs BENCH_VESPA_URL" }
+            AddrSmokeProbe.run(vespaUrl)
+            return
+        }
+
         // Ranking-change gate: order-fidelity + cost of a candidate rank profile
         // vs the tuned baseline, per term class (see RankQuality).
         if (System.getenv("BENCH_RANK_QUALITY") != null) {
