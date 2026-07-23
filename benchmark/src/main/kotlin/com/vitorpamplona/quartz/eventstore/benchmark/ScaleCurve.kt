@@ -96,6 +96,7 @@ object ScaleCurve {
                     Triple("follow-feed(a300)", 40) { s, i -> s.query<Event>(Filter(authors = w.authorList(i, 300), kinds = listOf(1, 6, 7), limit = 500)) },
                     Triple("nip50-search", 30) { s, i -> s.query<Event>(Filter(kinds = listOf(1), search = w.term(i), limit = 50)) },
                     Triple("id-lookup(16)", 300) { s, i -> s.query<Event>(Filter(ids = w.idList(i, 16))) },
+                    Triple("id-lookup(256)", 120) { s, i -> s.query<Event>(Filter(ids = w.idList(i, 256))) },
                 )
             for ((name, store) in engines) {
                 for ((shape, reps, op) in shapes) {
