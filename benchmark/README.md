@@ -227,7 +227,7 @@ the Vespa store; SQLite's in-process reads don't overlap the same way.
 
 ## Scale study: 25k → 400k
 
-The full curves — five metrics × five checkpoints, both engines — are in
+The full curves — six metrics × five checkpoints, both engines — are in
 [`docs/scale-curve.html`](../docs/scale-curve.html) (interactive, log–log). One
 prefix-stable seed-42 corpus was delta-ingested into both engines and measured
 at each checkpoint (`BENCH_SCALE_CURVE`, this box; Vespa a single shared-core
@@ -247,10 +247,16 @@ stays flat**, so the two engines cross as the corpus grows.
 | NIP-50 search — Vespa | 32.8 | 33.8 | 22.8 | 14.1 | 8.2 | |
 | follow-feed(a300) — SQLite | 38.7 | 28.6 | 19.5 | 16.8 | 13.3 | none ≤400k |
 | follow-feed(a300) — Vespa | 14.0 | 13.3 | 13.5 | 13.3 | 12.8 | (converge) |
-| id-lookup(16) — SQLite | 3,871 | 3,792 | 3,409 | 2,115 | 2,848 | none (~40×) |
-| id-lookup(16) — Vespa | 78 | 87 | 79 | 77 | 82 | |
+| id-lookup(16) — SQLite | 1,129 | 1,540 | 1,901 | 2,419 | 3,615 | none (20–48×) |
+| id-lookup(16) — Vespa | 55 | 68 | 70 | 80 | 75 | |
+| id-lookup(256) — SQLite | 286 | 316 | 244 | 258 | 281 | none (~18×) |
+| id-lookup(256) — Vespa | 14.7 | 15.1 | 15.2 | 15.8 | 15.9 | |
 | batch ingest ev/s — SQLite | 15,563 | 13,469 | 11,902 | 10,407 | 7,584 | none (7–13×) |
 | batch ingest ev/s — Vespa | 1,189 | 1,220 | 1,221 | 1,023 | 1,099 | |
+
+> The two id-lookup rows are from the later run that added the 256-id shape;
+> SQLite point reads are sub-millisecond and noisy on this shared box (±30%),
+> so read their *level* (20–48× ahead, no crossover), not the point-to-point wiggle.
 
 Read:
 
@@ -262,13 +268,26 @@ Read:
   absolute terms; Vespa just falls less — trust-ranked relevance is the reason to
   run it here, not raw speed. The crossover point is noisy run-to-run: reads swing
   ±20–40% on this shared box.)
-- **follow-feed, id-lookup(16), and ingest never cross ≤400k on this box.**
+- **follow-feed, id-lookup, and ingest never cross ≤400k on this box.**
   SQLite's in-process reads pay no HTTP hop, and this single-node container's
   follow-feed sits at ~14 q/s single-threaded. The follow-feed curves *converge*
   (SQLite 39 → 13 falling to meet Vespa's flat ~13 at 400k) but do not cross —
   its real Vespa win is **concurrency**, not single-query throughput (§3b: ~55k
   events/sec at conc 8–32). Ingest is now flat ~1,100 ev/s across all sizes
   (warm), 7–13× under SQLite.
+- **id-lookup is flat on Vespa at every corpus size** — that flatness is the
+  tell. A 16-id REQ holds ~55–80 q/s and a 256-id REQ ~15 q/s **independent of
+  25k→400k**, because the cost tracks the *number of matched documents fetched*,
+  not the table size. Isolated on the 400k store (single-threaded client): a
+  256-id query spends ~7 ms matching (parse + `id in (…)` dictionary probes,
+  17 KB of query text and all) and ~16 ms fetching the ~238 matched docs' summary
+  — the fetch is the lever, not the id encoding. Blowing the query text up 52×
+  (4 → 256 ids) added only ~1.7 ms, so **pre-hashing ids to shorten the request
+  buys < 1 ms of ~24 ms** (the id is already a 32-byte hash Vespa re-hashes into
+  its `dictionary { hash }` attribute; folding it shorter would also reintroduce
+  collision risk on an exact-match key). The real levers for a large id-set are
+  parallel `document/v1` GETs by primary key (what `ID_GET_FANOUT` already does
+  ≤32 ids) and a leaner summary — both attack the fetch, not the id string.
 
 Extrapolating the eroding SQLite curves, more shapes flip past ~1M. Practical
 read: **a search/timeline-serving relay starts to benefit from this store in the

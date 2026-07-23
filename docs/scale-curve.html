@@ -94,9 +94,14 @@ const DATA = {
     vespa:  [32.8, 33.8, 22.8, 14.1, 8.2],
   },
   "id-lookup, 16 ids (q/s)": {
-    note: "no crossover — 16 in-process point reads stay ~35–50× ahead (no network hop)",
-    sqlite: [3871, 3792, 3409, 2115, 2848],
-    vespa:  [77.8, 86.9, 78.5, 76.9, 81.9],
+    note: "no crossover — SQLite point reads stay 20–48× ahead; Vespa flat ~55–80 (each id = one keyed get)",
+    sqlite: [1129, 1540, 1901, 2419, 3615],
+    vespa:  [55.0, 67.6, 70.4, 79.8, 74.7],
+  },
+  "id-lookup, 256 ids (q/s)": {
+    note: "no crossover — Vespa pinned ~15 q/s at every size (cost = fetching the ~238 matched docs, not corpus size); SQLite ~18× ahead",
+    sqlite: [286, 316, 244, 258, 281],
+    vespa:  [14.7, 15.1, 15.2, 15.8, 15.9],
   },
 };
 const W = 340, H = 220, M = {t: 8, r: 12, b: 26, l: 46};
