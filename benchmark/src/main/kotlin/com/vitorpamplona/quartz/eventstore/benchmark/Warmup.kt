@@ -52,7 +52,10 @@ object Warmup {
         val junk = NostrCorpus.generate(NostrCorpus.Config(size = n, seed = 41, idBand = 0x9L))
         runBlocking {
             junk.chunked(1_000).forEach { store.batchInsert(it) }
-            if (cleanup) store.delete(Filter(ids = junk.map { it.id }))
+            // Delete in small id chunks: one giant Filter(ids=…) makes the store search
+            // + summary-fetch all N at once, which times out (504) on real Vespa. Small
+            // chunks keep each delete's recall bounded.
+            if (cleanup) junk.map { it.id }.chunked(200).forEach { store.delete(Filter(ids = it)) }
         }
     }
 
