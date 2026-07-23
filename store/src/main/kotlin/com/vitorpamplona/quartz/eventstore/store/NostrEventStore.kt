@@ -199,6 +199,13 @@ class NostrEventStore(
         val batchIds = events.map { it.id }
         val batchAddresses = events.mapNotNull { it.addressOrNull() }.distinct()
         val records = events.filter { it !is DeletionEvent && it !is RequestToVanishEvent }
+        // Only owners that provably HAVE a stored tombstone/vanish can guard this
+        // batch (GuardOwners) — for everyone else both probes come back empty, so
+        // skip them. A content batch touches ~500 owners but almost none are
+        // flagged, turning ~3 heavy queries/owner-chunk into zero. This is the same
+        // gate the per-event path (insertLocked) and the pure-record bulk path
+        // (BulkInsert.plan) already apply; the mixed path was missing it.
+        val guardedOwners = guards.filterFlagged(owners)
 
         val queries =
             buildList {
@@ -206,8 +213,8 @@ class NostrEventStore(
                 (batchIds + deletions.flatMap { it.deleteEventIds() }).distinct().chunked(PRELOAD_CHUNK).forEach { add(EventQuery(ids = it)) }
 
                 // Guards + immunity: the owners' stored tombstones (targeting this
-                // batch's ids/addresses) and their vanishes.
-                owners.chunked(PRELOAD_CHUNK).forEach { auth ->
+                // batch's ids/addresses) and their vanishes — only for flagged owners.
+                guardedOwners.chunked(PRELOAD_CHUNK).forEach { auth ->
                     if (batchIds.isNotEmpty()) add(EventQuery(kinds = listOf(DeletionEvent.KIND), authors = auth, tags = mapOf("e" to batchIds)))
                     if (batchAddresses.isNotEmpty()) add(EventQuery(kinds = listOf(DeletionEvent.KIND), authors = auth, tags = mapOf("a" to batchAddresses)))
                     add(EventQuery(kinds = listOf(RequestToVanishEvent.KIND), authors = auth))
@@ -241,7 +248,9 @@ class NostrEventStore(
                 vanishes.map { it.pubKey }.distinct().forEach { add(EventQuery(owners = listOf(it))) }
             }
 
-        queries.mapBounded(QUERY_FANOUT) { index.search(it) }.forEach { page -> page.forEach { snapshot.put(it) } }
+        com.vitorpamplona.quartz.eventstore.vespa.IngestStats.timed("preload") {
+            queries.mapBounded(QUERY_FANOUT) { index.search(it) }.forEach { page -> page.forEach { snapshot.put(it) } }
+        }
     }
 
     private suspend fun tryInsertLocked(event: Event): IEventStore.InsertOutcome =

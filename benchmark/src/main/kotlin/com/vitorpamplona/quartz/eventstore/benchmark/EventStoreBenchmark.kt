@@ -121,7 +121,7 @@ object EventStoreBenchmark {
                 println(String.format("ingested %d events (batch %d) in %.1fs = %.0f events/sec", n, batch, secs, n / secs))
                 println(
                     com.vitorpamplona.quartz.eventstore.vespa.IngestStats
-                        .gauge(),
+                        .dump(),
                 )
                 println(store.feedGauge())
             }
