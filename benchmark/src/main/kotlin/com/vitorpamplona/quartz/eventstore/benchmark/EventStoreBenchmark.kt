@@ -295,6 +295,9 @@ object EventStoreBenchmark {
         batch: Int,
         factory: () -> IEventStore,
     ) = runBlocking {
+        // Warm the JVM for this backend (throwaway store) so the timed inserts below
+        // are steady state, not JIT warmup — see Warmup.
+        Warmup.warmVia(factory = factory)
         // Per-event insert() measured AT CORPUS SCALE: preload everything but a
         // probe tail via the bulk path, then time per-event inserts on top —
         // the same shape as the real-Vespa probe. Per-event-inserting the FULL

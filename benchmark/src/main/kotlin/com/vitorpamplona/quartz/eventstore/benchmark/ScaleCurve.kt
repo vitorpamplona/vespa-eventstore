@@ -61,6 +61,10 @@ object ScaleCurve {
         val sqlite = Backends.sqliteMemory()
         val vespa: IEventStore? = url?.let { VespaEventStore.open(it) }
         val engines = listOfNotNull("sqlite" to sqlite, vespa?.let { "vespa" to it })
+        // Warm each engine (feed+delete junk) so the FIRST checkpoint's ingest is
+        // steady state, not JIT warmup — otherwise the 25k point reads artificially
+        // low (cold) while later checkpoints are already warm from delta-feeding.
+        engines.forEach { (_, store) -> Warmup.warm(store) }
         val csv = StringBuilder("curve,size,engine,metric,value\n")
 
         fun emit(

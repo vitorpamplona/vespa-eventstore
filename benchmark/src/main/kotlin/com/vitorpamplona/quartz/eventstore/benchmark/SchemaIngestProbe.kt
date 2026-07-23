@@ -43,15 +43,26 @@ object SchemaIngestProbe {
         val url = System.getenv("VESPA_URL") ?: "http://localhost:8080"
         val size = System.getenv("BENCH_SI_SIZE")?.toIntOrNull() ?: 60_000
         val batch = System.getenv("BENCH_SI_BATCH")?.toIntOrNull() ?: 500
+        // Warmup feed, discarded, so the measured rate is STEADY STATE not JVM warmup.
+        // A freshly-deployed Vespa spends ~30s of its first feed JIT-compiling the
+        // Jetty/jdisc/docproc/messagebus pipeline (profiled: compile-time +33s in feed
+        // round 1, then ~0). Feeding this many docs first pushes those hot methods to
+        // C2 so the timed feed measures the warm engine (~1.5x the cold rate here).
+        val warmup = System.getenv("BENCH_SI_WARMUP")?.toIntOrNull() ?: (size / 2).coerceIn(10_000, 40_000)
 
-        // Build the docs once (id-disjoint band so reruns against a live engine stay fresh writes).
-        val corpus = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = 42, idBand = 0x7L))
-        val docs = corpus.map { EventDoc.fromEventJson(it.toJson()) }
+        // id-disjoint bands: warmup (0x9) and the measured set (0x7) never collide, so
+        // the timed feed is all fresh puts, not overwrites of the warmup docs.
+        val docs = NostrCorpus.generate(NostrCorpus.Config(size = size, seed = 42, idBand = 0x7L)).map { EventDoc.fromEventJson(it.toJson()) }
 
         VespaEventIndex(url).use { idx ->
+            if (warmup > 0) {
+                val warmDocs = NostrCorpus.generate(NostrCorpus.Config(size = warmup, seed = 41, idBand = 0x9L)).map { EventDoc.fromEventJson(it.toJson()) }
+                val wNanos = measureNanoTime { runBlocking { warmDocs.chunked(batch).forEach { idx.putAll(it) } } }
+                println(String.format("warmup: fed %d docs (discarded) in %.1fs = %.0f events/sec", warmup, wNanos / 1e9, warmup / (wNanos / 1e9)))
+            }
             val nanos = measureNanoTime { runBlocking { docs.chunked(batch).forEach { idx.putAll(it) } } }
             val secs = nanos / 1e9
-            println(String.format("schema-ingest: fed %d docs (batch %d) in %.1fs = %.0f events/sec", size, batch, secs, size / secs))
+            println(String.format("schema-ingest (warm): fed %d docs (batch %d) in %.1fs = %.0f events/sec", size, batch, secs, size / secs))
             println(idx.feedGauge())
         }
     }

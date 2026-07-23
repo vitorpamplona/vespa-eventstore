@@ -66,6 +66,9 @@ object VespaRunner {
 
             // --- bulk ingest (the path the framework is built around) ---
             if (!skipIngest) {
+                // Warm the engine's jdisc JIT (feed+delete junk) so the ingest rate
+                // below is steady state, not the ~30s first-feed compile wave — see Warmup.
+                Warmup.warm(store)
                 println("ingesting ${corpus.size} events via batchInsert($batch) ...")
                 val ingestNanos =
                     measureNanoTime {

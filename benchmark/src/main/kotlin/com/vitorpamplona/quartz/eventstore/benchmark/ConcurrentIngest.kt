@@ -61,6 +61,11 @@ object ConcurrentIngest {
                 .mapNotNull { it.trim().toIntOrNull() }
 
         println("concurrent-writer ingest: size=$size/level batch=$batch concurrencies=$concs")
+        // Warm the JVM (and, for Vespa, the engine's jdisc JIT) before the sweep so the
+        // conc=1 row isn't measured cold — otherwise warmup would masquerade as concurrency
+        // scaling as the JIT settles across levels. See Warmup.
+        Warmup.warmVia { Backends.sqliteMemory() }
+        url?.let { u -> Warmup.warmVia { VespaEventStore.open(u) } }
         println(String.format("%-8s %6s %14s %11s %9s  %s", "engine", "writers", "events/sec", "scale@1", "rejects", "batchInsert latency"))
 
         for (engine in listOfNotNull("sqlite", url?.let { "vespa" })) {
