@@ -65,8 +65,9 @@ Tunables (env): `BENCH_SIZE` (corpus events, default 30000), `BENCH_BATCH`
 (batchInsert chunk, 500), `BENCH_QUERIES` (reps per query shape, 2000),
 `BENCH_REF_SIZE` (cap for the O(n²) in-memory reference, 8000), `BENCH_SEED`.
 Add `BENCH_THROUGHPUT=1` (with `BENCH_CONCURRENCY=1,8,32`) for the concurrent
-table (§3b), and `BENCH_SCALE_CURVE=1` (with `BENCH_CURVE_SIZES=…`) for the
-[scale study](#scale-study-25k--400k).
+read table (§3b), `BENCH_CONCURRENT_INGEST=1` (with `BENCH_CI_SIZE` /
+`BENCH_CI_CONC`) for the concurrent-writer A/B (§2b), and `BENCH_SCALE_CURVE=1`
+(with `BENCH_CURVE_SIZES=…`) for the [scale study](#scale-study-25k--400k).
 
 ## Results
 
@@ -110,6 +111,46 @@ This is engine-independent, and it dominates real-Vespa ingest (below).
   On a real multi-node cluster the feed client pipelines much further, widening
   the gap. **Rule: never ingest into Vespa via per-event `insert()`; always
   `batchInsert`.**
+
+### 2b. Concurrent-writer ingest (`BENCH_CONCURRENT_INGEST=1`)
+
+The write-side mirror of §3b, and geode's `publishThroughputConcurrent`: N
+publishers each `batchInsert` a disjoint corpus slice at once (60k events/level,
+id-disjoint per level), aggregate events/sec as N rises. The hypothesis was that
+SQLite's **single writer** would bottleneck and this store's lock-free feed
+client would scale past it. **It doesn't — on one box SQLite wins outright:**
+
+| writers | SQLite ev/s | Vespa ev/s | SQLite p50 | Vespa p50 |
+|---:|---:|---:|---:|---:|
+| 1 | 10,881 | 670 | 42 ms | 544 ms |
+| 4 | **13,362** | 1,047 | 151 ms | 1,774 ms |
+| 8 | 12,471 | 978 | 310 ms | 3,932 ms |
+| 16 | 12,351 | 1,066 | 614 ms | 6,927 ms |
+| 32 | 11,432 | 1,109 | 1,337 ms | 13,875 ms |
+
+Both results run against the hypothesis, and both are worth knowing:
+
+- **SQLite's single writer is not the bottleneck it looks like.** Aggregate EPS
+  holds ~11–13k across every writer count (peaks at 4), **0 rejects** — concurrent
+  batches are *coalesced by group commit* behind the lock, not blocked. More
+  writers only raise per-batch latency linearly (42 → 1,337 ms) while total
+  throughput stays flat. In-memory SQLite ingest is just fast.
+- **The Vespa store barely scales with publishers (1.66× from 1→32) and is ~10×
+  slower in absolute terms.** Two reasons: (1) the feed client *already*
+  pipelines a single stream — hundreds of writes in flight over HTTP/2 — so one
+  `batchInsert` already saturates what this container's proton can absorb
+  (~700–1,100 EPS), leaving little for external concurrency to add; (2) one
+  shared-core container is **proton-bound, not lock-bound**, so latency balloons
+  (p50 13.9 s at 32 writers) as every batch queues against that fixed ceiling.
+
+So on a single box SQLite out-ingests single-node Vespa ~10× whether writers are
+serial or concurrent — consistent with §2 and the ingest curve, and with geode's
+own choice of SQLite + group commit for a single-box relay. Vespa's write scaling
+is a **multi-node** property (proton sharded across content nodes); it does not
+show on one container, and the feed client already extracts the available
+single-node concurrency from one stream. **Net: concurrent publishers are not a
+reason to pick single-node Vespa; corpus size, read concurrency at scale, and
+search relevance are.**
 
 ### 3. Query throughput (queries/sec; higher is better)
 
