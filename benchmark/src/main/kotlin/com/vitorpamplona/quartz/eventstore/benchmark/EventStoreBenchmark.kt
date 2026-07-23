@@ -143,6 +143,13 @@ object EventStoreBenchmark {
             return
         }
 
+        // Concurrent-writer ingest A/B: N publishers batchInsert at once, SQLite's
+        // single writer vs the Vespa feed client's many-in-flight (see ConcurrentIngest).
+        if (System.getenv("BENCH_CONCURRENT_INGEST") != null) {
+            ConcurrentIngest.run(vespaUrl, seed)
+            return
+        }
+
         // Bulk-ingest sweep: chunk size x parallel streams against a live Vespa
         // (see IngestSweep) — which knob raises the throttle-floor-bound ingest.
         if (System.getenv("BENCH_INGEST_SWEEP") != null) {
