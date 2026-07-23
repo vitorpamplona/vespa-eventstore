@@ -23,6 +23,7 @@ import ai.vespa.feed.client.DocumentId
 import ai.vespa.feed.client.FeedClient
 import ai.vespa.feed.client.FeedClientBuilder
 import ai.vespa.feed.client.OperationParameters
+import ai.vespa.feed.client.Result
 import com.vitorpamplona.quartz.eventstore.vespa.doc.EventDoc
 import com.vitorpamplona.quartz.eventstore.vespa.doc.SearchFields
 import com.vitorpamplona.quartz.eventstore.vespa.mapBounded
@@ -157,16 +158,42 @@ class VespaEventIndex(
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
+    // ADDRESS-KEYED mode (VESPA_ADDRESS_KEYED=1): replaceable/addressable events
+    // are stored under their NIP-01 address as the document id, so the engine
+    // enforces newest-wins with a conditional put (see [putIfNewer]) instead of
+    // the client's read-then-supersede. Regular events stay id-keyed. Default OFF
+    // — the whole scheme is opt-in until measured. When ON, id lookups can no
+    // longer ride the document-API get (replaceables live under an address docid),
+    // so they route through the `id`-attribute search, which finds both.
+    private val addressKeyed = System.getenv("VESPA_ADDRESS_KEYED")?.toBooleanStrictOrNull() ?: false
+
+    /** The document id for [doc]: its address when address-keyed and replaceable, else its event id. */
+    private fun docIdOf(doc: EventDoc): String = if (addressKeyed) doc.addressOrNull() ?: doc.id else doc.id
+
     override suspend fun get(id: String): EventDoc? {
+        // Address-keyed replaceables aren't at the id docid; resolve by the id
+        // attribute instead (finds regular AND replaceable, no doc-API get).
+        if (addressKeyed) return searchById(id)
         val resp = send("${endpoint()}/document/v1/$NAMESPACE/$DOCTYPE/docid/$id")
         if (resp.statusCode() == 404) return null
         require(resp.statusCode() < 400) { "vespa get ${resp.statusCode()}: ${resp.body().take(300)}" }
         return DECODER.decodeFromString<DocEnvelope>(resp.body()).fields?.toDoc()
     }
 
+    /** One doc by its `id` attribute via the search stack — the id-lookup path under address-keying (no doc-API get, no [getByIds] recursion). */
+    private suspend fun searchById(id: String): EventDoc? {
+        val vq = EventYql.build(EventQuery(ids = listOf(id))) ?: return null
+        return DECODER
+            .decodeFromString<SearchEnvelope>(queryBody(vq, hits = 1))
+            .root.children
+            .firstOrNull()
+            ?.fields
+            ?.toDoc()
+    }
+
     private fun putOp(doc: EventDoc) =
         feed.put(
-            DocumentId.of(NAMESPACE, DOCTYPE, doc.id),
+            DocumentId.of(NAMESPACE, DOCTYPE, docIdOf(doc)),
             buildJsonObject { put("fields", doc.indexFields()) }.toString(),
             feedParams(),
         )
@@ -182,8 +209,35 @@ class VespaEventIndex(
         docs.map { putOp(it) }.forEach { it.await() }
     }
 
+    /**
+     * Address-keyed newest-wins as a single server-side conditional put: create if
+     * absent, else overwrite only when the incoming version beats the stored one
+     * (higher created_at, or same created_at and a LOWER id — NIP-01). Stale
+     * versions come back `conditionNotMet` (rejected by the engine, no client
+     * read). Falls back to the search-then-supersede default when address-keying
+     * is off or the doc is not replaceable.
+     */
+    override suspend fun putIfNewer(doc: EventDoc): Boolean {
+        val address = doc.addressOrNull()
+        if (!addressKeyed || address == null) return super.putIfNewer(doc)
+        val condition =
+            "event.created_at < ${doc.createdAt} or " +
+                "(event.created_at == ${doc.createdAt} and event.id > \"${doc.id}\")"
+        val result =
+            feed
+                .put(
+                    DocumentId.of(NAMESPACE, DOCTYPE, address),
+                    buildJsonObject { put("fields", doc.indexFields()) }.toString(),
+                    feedParams().createIfNonExistent(true).testAndSetCondition(condition),
+                ).await()
+        return result.type() != Result.Type.conditionNotMet
+    }
+
     override suspend fun remove(id: String) {
-        removeOp(id).await()
+        // Under address-keying the doc may live at an address docid, so resolve it
+        // (regular -> id docid, replaceable -> address docid) before removing.
+        val docId = if (addressKeyed) get(id)?.let { docIdOf(it) } ?: id else id
+        feed.remove(DocumentId.of(NAMESPACE, DOCTYPE, docId), feedParams()).await()
     }
 
     /** All removes in flight together over HTTP/2, like [putAll]. */
@@ -235,7 +289,8 @@ class VespaEventIndex(
      * chunks) must stay on the search path or ingest would collapse.
      */
     private fun EventQuery.isPureIdLookup(): Boolean =
-        ids.isNotEmpty() && ids.size <= ID_GET_FANOUT &&
+        !addressKeyed && // address-keyed replaceables aren't at the id docid — route ids through search
+            ids.isNotEmpty() && ids.size <= ID_GET_FANOUT &&
             kinds.isEmpty() && notKinds.isEmpty() && authors.isEmpty() && owners.isEmpty() &&
             tags.isEmpty() && tagsAll.isEmpty() &&
             since == null && until == null && expiresBefore == null &&
