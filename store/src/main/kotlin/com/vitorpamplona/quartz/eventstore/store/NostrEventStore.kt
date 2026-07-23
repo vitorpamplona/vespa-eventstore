@@ -308,13 +308,32 @@ class NostrEventStore(
             if (deleted?.await() == true) throw RejectedException(Rejections.DELETED)
             if (vanished?.await() == true) throw RejectedException(Rejections.VANISHED)
         }
-        when (event) {
-            is DeletionEvent -> applyDeletion(event)
-            is RequestToVanishEvent -> applyVanish(event)
-            else -> supersede(event)
+        when {
+            event is DeletionEvent -> {
+                applyDeletion(event)
+                index.put(event.toDoc())
+                guards.noteGuardStored(event.pubKey)
+            }
+
+            event is RequestToVanishEvent -> {
+                applyVanish(event)
+                index.put(event.toDoc())
+                guards.noteGuardStored(event.pubKey)
+            }
+
+            // Replaceable/addressable newest-wins in ONE call: address-keyed Vespa
+            // rejects a stale version server-side (conditionNotMet, no read); the
+            // default resolves it with the same (created_at, then lowest id) rule
+            // the old supersede()+put did. False == a same-or-newer version holds
+            // the address, so this insert is REPLACED.
+            event.kind.isReplaceable() || event.kind.isAddressable() -> {
+                if (!index.putIfNewer(event.toDoc())) throw RejectedException(Rejections.REPLACED)
+            }
+
+            else -> {
+                index.put(event.toDoc())
+            }
         }
-        index.put(event.toDoc())
-        if (event is DeletionEvent || event is RequestToVanishEvent) guards.noteGuardStored(event.pubKey)
     }
 
     // ---- queries ------------------------------------------------------------
@@ -541,50 +560,6 @@ class NostrEventStore(
         return vanishes.any { doc ->
             (Event.fromJsonOrNull(doc.toEventJson()) as? RequestToVanishEvent)?.shouldVanishFrom(relay) == true
         }
-    }
-
-    /**
-     * Replaceable/addressable version resolution in ONE query. Fetch the stored
-     * versions once. If any of them wins the (created_at, lowest id wins ties)
-     * comparison, reject this insert. Otherwise delete the strictly-older ones it
-     * supersedes.
-     */
-    private suspend fun supersede(event: Event) {
-        val versions = currentVersions(event)
-        if (versions.any { it.createdAt > event.createdAt || (it.createdAt == event.createdAt && it.id < event.id) }) {
-            throw RejectedException(Rejections.REPLACED)
-        }
-        versions.forEach {
-            if (it.createdAt < event.createdAt || (it.createdAt == event.createdAt && it.id > event.id)) index.remove(it.id)
-        }
-    }
-
-    /**
-     * The stored versions sharing this event's replaceable address. Addressables
-     * compare d-tags doc-side (not via tag_index) so a missing d tag and an
-     * explicit empty one meet at the same address, per NIP-01.
-     */
-    private suspend fun currentVersions(event: Event): List<EventDoc> {
-        if (!event.kind.isReplaceable() && !event.kind.isAddressable()) return emptyList()
-        if (!event.kind.isAddressable()) {
-            // Replaceable: one address per (kind, author); the query is exact.
-            return index.search(EventQuery(kinds = listOf(event.kind), authors = listOf(event.pubKey)))
-        }
-        val d = event.tags.dTag()
-        // Constrain by d in the QUERY when it's present, so a prolific author's
-        // OTHER addresses of this kind don't push the target version past the
-        // 10k search page. Missing it would miss supersession — a real defect for
-        // trust providers with tens of thousands of 30382s. The empty/missing-d
-        // address can't use tag recall, so it keeps the broad (kind, author)
-        // query; an author with >10k empty-d addressables of one kind is not a
-        // real case. The doc-side d filter still normalizes missing == empty.
-        val docs =
-            if (d.isNullOrEmpty()) {
-                index.search(EventQuery(kinds = listOf(event.kind), authors = listOf(event.pubKey)))
-            } else {
-                index.search(EventQuery(kinds = listOf(event.kind), authors = listOf(event.pubKey), tags = mapOf("d" to listOf(d))))
-            }
-        return docs.filter { doc -> doc.dTagOrEmpty() == d }
     }
 
     /**

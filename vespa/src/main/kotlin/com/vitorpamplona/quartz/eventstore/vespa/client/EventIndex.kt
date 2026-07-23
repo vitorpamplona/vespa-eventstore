@@ -159,7 +159,12 @@ interface EventIndex : AutoCloseable {
                 return true
             }
         val q =
-            if (doc.kind.isAddressable()) {
+            // Addressable with a non-empty d: narrow by d so a prolific author's
+            // other addresses of this kind don't push the target past the search
+            // page. Replaceable, or addressable with an empty/missing d (nothing to
+            // recall on), stay broad by (kind, author) — the addressOrNull filter
+            // below is the exact match and normalizes missing == empty d.
+            if (doc.kind.isAddressable() && doc.dTagOrEmpty().isNotEmpty()) {
                 EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey), tags = mapOf("d" to listOf(doc.dTagOrEmpty())))
             } else {
                 EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey))

@@ -113,6 +113,19 @@ class PutIfNewerTest {
         }
 
     @Test
+    fun addressableEmptyDTagSupersedes() =
+        runBlocking {
+            // An addressable event with a MISSING d tag can't be found by a `d:` tag
+            // recall — the broad (kind, author) path + address filter must still catch it.
+            val idx = InMemoryEventIndex()
+            val v1 = doc("e1", kind = 30000, at = 100)
+            val v2 = doc("e2", kind = 30000, at = 200)
+            assertTrue(idx.putIfNewer(v1))
+            assertTrue(idx.putIfNewer(v2))
+            assertEquals(listOf(v2.id), idx.search(EventQuery(kinds = listOf(30000), authors = listOf(alice))).map { it.id })
+        }
+
+    @Test
     fun regularEventsNeverSupersede() =
         runBlocking {
             val idx = InMemoryEventIndex()
