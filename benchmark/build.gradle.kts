@@ -16,6 +16,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines)
     // The corpus generator builds canonical event JSON with the JsonElement tree API.
     implementation(libs.kotlinx.serialization.json)
+    // CondPutProbe drives the feed client directly to A/B server-side test-and-set
+    // (address-keyed conditional put) against the store's read-then-supersede.
+    implementation(libs.vespa.feed.client)
 
     // VespaParityIT stands up a real Vespa in a container and runs the parity
     // battery against it — the CI correctness gate. Skips when Docker is absent.

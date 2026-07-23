@@ -128,6 +128,14 @@ object EventStoreBenchmark {
             return
         }
 
+        // Replaceable/draft-churn A/B: client read-then-supersede vs Vespa's
+        // server-side test-and-set (address-keyed conditional put).
+        if (System.getenv("BENCH_CONDPUT") != null) {
+            requireNotNull(vespaUrl) { "BENCH_CONDPUT needs BENCH_VESPA_URL" }
+            CondPutProbe.run(vespaUrl, seed)
+            return
+        }
+
         // Ranking-change gate: order-fidelity + cost of a candidate rank profile
         // vs the tuned baseline, per term class (see RankQuality).
         if (System.getenv("BENCH_RANK_QUALITY") != null) {
