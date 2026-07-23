@@ -66,8 +66,10 @@ Tunables (env): `BENCH_SIZE` (corpus events, default 30000), `BENCH_BATCH`
 `BENCH_REF_SIZE` (cap for the O(n²) in-memory reference, 8000), `BENCH_SEED`.
 Add `BENCH_THROUGHPUT=1` (with `BENCH_CONCURRENCY=1,8,32`) for the concurrent
 read table (§3b), `BENCH_CONCURRENT_INGEST=1` (with `BENCH_CI_SIZE` /
-`BENCH_CI_CONC`) for the concurrent-writer A/B (§2b), and `BENCH_SCALE_CURVE=1`
-(with `BENCH_CURVE_SIZES=…`) for the [scale study](#scale-study-25k--400k).
+`BENCH_CI_CONC`) for the concurrent-writer A/B (§2b), `BENCH_CONDPUT=1` (with
+`BENCH_CP_ADDRS` / `BENCH_CP_OPS` / `BENCH_CP_OLDPCT`) for the draft-churn
+conditional-put A/B (§2c), and `BENCH_SCALE_CURVE=1` (with `BENCH_CURVE_SIZES=…`)
+for the [scale study](#scale-study-25k--400k).
 
 ## Results
 
@@ -157,6 +159,36 @@ show on one container, and the feed client already extracts the available
 single-node concurrency from one stream. **Net: concurrent publishers are not a
 reason to pick single-node Vespa; corpus size, read concurrency at scale, and
 search relevance are.**
+
+### 2c. Draft-churn supersession — server-side conditional put (`BENCH_CONDPUT=1`)
+
+Clients re-save replaceable drafts constantly (every ~2 s per open editor), so a
+relay sees a flood of replaceable/addressable saves where **most are stale
+resends** of a version it already holds. The default path pays a supersession
+search per save to find the incumbent; Vespa can instead enforce NIP-01
+newest-wins **server-side** with an address-keyed conditional put — one write,
+no read, stale versions rejected by the engine. This is the opt-in
+`VESPA_ADDRESS_KEYED` mode (address as docid + test-and-set condition; see
+[`docs/server-side-constraints.md`](../docs/server-side-constraints.md) §2).
+
+A/B on the identical churn stream (5,000 draft addresses, 60,000 saves, 69%
+stale resends below the running head):
+
+| arm | throughput | wall |
+|---|---:|---:|
+| A) read-then-supersede (default) | 599 ev/s | 100.2 s |
+| B) conditional put (address-keyed) | **1,940 ev/s** | 30.9 s (50,478 stale rejected server-side) |
+
+**B/A = 3.24×.** The win scales with the stale fraction: every stale resend
+costs the read path a supersession search but costs the conditional put one
+rejected write with no read. The mode is off by default — it is a docid-scheme
+split (regular events by id, replaceables by address) worth enabling only where
+replaceable/draft churn dominates. `BENCH_ADDR_SMOKE=1` (with
+`VESPA_ADDRESS_KEYED=1`) is the live end-to-end correctness smoke for it.
+
+> Note: through the production trust-projection decorator, supersession stays
+> read-based so the projection's write reactions still see both versions; the
+> conditional-put fast path engages on the undecorated index.
 
 ### 3. Query throughput (queries/sec; higher is better)
 
