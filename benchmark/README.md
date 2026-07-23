@@ -670,6 +670,75 @@ scaling to concurrency 128 instead of plateauing. Config-only, so results/parity
 are unchanged. A latency-critical (few big queries) deployment
 would raise it instead.
 
+### The ingest ceiling is NOT indexing or durability (config A/Bs)
+
+Single-node Vespa tops out ~1,000 events/sec on this box (§2, §2b) — ~10× under
+in-memory SQLite. Two A/Bs, feeding 60k docs straight through `VespaEventIndex`
+(`BENCH_SCHEMA_INGEST=1`, no store logic — pure engine write path), rule out the
+two obvious suspects:
+
+| A/B | variant A | variant B | Δ |
+|---|---|---|---|
+| **schema** | full index (attrs + BM25 + trigram): **1,101** ev/s | summary-only (every field stored, *nothing* indexed): **1,153** ev/s | **+5%** |
+| **durability** | `sync-transactionlog=true` (WAL fsync): **1,033** ev/s | `sync-transactionlog=false`: **1,022** ev/s | **~0%** |
+
+So **dropping every index buys 5%, and disabling the WAL fsync buys nothing** on
+local SSD. It is not our client, either: the official `vespa-feed-client` run
+*inside* the container gets the same rate (~860 ev/s cold, ~1,500–1,800 warm).
+During a feed the container pegs **~380% of its 4 cores** — it is CPU-bound. A
+per-process profile shows exactly where that CPU goes:
+
+| process | role | %CPU (of 400%) |
+|---|---|---|
+| **`container.0`** (jdisc) | HTTP/2 + JSON parse + schema-validate + marshal to internal doc protocol | **110–170%** |
+| `vespa-feed-client` | client-side JSON + HTTP (runs elsewhere in prod) | ~100% |
+| **`vespa-proton-bin`** | **the actual insert: index + document store + WAL** | **~30–60%** |
+| config-server / cluster-controller / distributor | admin + bucket routing | ~60% |
+
+**The insert engine (proton) is the *lightest* major consumer.** The weight is
+the stateless jdisc **container** tier marshalling every document — HTTP/2 →
+JSON parse → validate each field against the schema → re-serialize into Vespa's
+internal document/messagebus binary → route to proton → marshal the ack back.
+That is *why* the schema and durability A/Bs came back flat: proton — which does
+the indexing and the fsync — was never the bottleneck; it has headroom. The cost
+is the document-API pipeline in front of it. In-process in-memory SQLite pays
+none of that per-document marshalling, which is the entire ~10× gap — not the
+schema, not durability, not the write.
+
+Why the fsync was free when Vespa's own guide quotes a **60× win** from disabling
+it: that figure is on **network-attached storage (EBS/NAS)**, where an fsync is a
+network round trip. On local SSD the fsync is cheap *and* proton's group commit
+amortizes it across the ~100 in-flight ops, so the cost that dominates on NAS is
+noise here. `sync-transactionlog=false` is therefore a real lever **only on cloud
+block storage** (a relay's durability is weak anyway — clients resend unacked
+events), and noise on local disk.
+
+### Config levers, reviewed
+
+| lever | measured / status | verdict for this store |
+|---|---|---|
+| drop indexes (summary-only schema) | +5% ingest | **no** — trivial write win, and it removes all query ability |
+| `sync-transactionlog=false` | 0% local SSD; up to 60× on EBS/NAS (Vespa docs) | **only on network storage** — legit for relay-grade durability there |
+| `visibility-delay > 0` | not run | **trap** — batches index commits for feed throughput but delays visibility; the store's single-writer dedup/supersession does query-then-write and needs read-your-writes, so this breaks correctness |
+| `numthreadspersearch` | 1 (above) | already throughput-optimal for concurrent serving; raise only for latency-critical single-query deployments |
+| `paged` attributes | not run | **scale** lever, not speed — mmap/disk-backed attributes let the corpus grow past RAM (the corpus-past-SQLite story), at read cost |
+| match-phase early-terminate | not run | **trap** — approximate; caps `totalCount` and can miss the newest, breaking exact-newest-N REQ semantics |
+| feeding concurrency / feed-client conns | 1.0 / 8×256 | already maxed (services.xml + `VespaEventIndex`) |
+
+**Bottom line: no single-node config knob meaningfully speeds ingest here** — the
+cost is the jdisc container tier's per-document marshalling, not a tunable, and
+not the write engine. The real ingest lever is **horizontal scale of the
+*stateless container* tier**: in a real deployment the container and content
+pools are separate node sets scaled independently, and feed CPU lives in the
+container tier — so a feed-heavy relay adds container nodes while proton (which
+has headroom here) stays on the content nodes. Our single all-in-one dev
+container collapses container + content + admin (+ the client, in the profiled
+run) onto 4 cores, so the container tier starves everything while proton idles at
+~half a core — Vespa's worst-case shape, and why single-node ingest understates
+it. Harness: `SchemaIngestProbe` (`BENCH_SCHEMA_INGEST=1`)
+feeds against whatever schema is deployed, so the schema and `sync-transactionlog`
+variants are reproducible by deploying the corresponding app package first.
+
 ### NIP-50 two-phase ranking: MEASURED at 489k — real but modest; not the default
 
 The corpus-size precondition from the study below was finally met (489k docs;
