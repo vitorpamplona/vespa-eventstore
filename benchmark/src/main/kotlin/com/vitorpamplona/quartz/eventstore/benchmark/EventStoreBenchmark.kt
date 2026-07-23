@@ -150,6 +150,13 @@ object EventStoreBenchmark {
             return
         }
 
+        // Pure index-write probe: feed docs straight through VespaEventIndex against
+        // whatever schema is deployed, to isolate index-build cost (see SchemaIngestProbe).
+        if (System.getenv("BENCH_SCHEMA_INGEST") != null) {
+            SchemaIngestProbe.main(emptyArray())
+            return
+        }
+
         // Bulk-ingest sweep: chunk size x parallel streams against a live Vespa
         // (see IngestSweep) — which knob raises the throttle-floor-bound ingest.
         if (System.getenv("BENCH_INGEST_SWEEP") != null) {
