@@ -86,13 +86,35 @@ class TrustProjection(
 
     override suspend fun count(query: EventQuery): Int = inner.count(query)
 
+    // The author/kind aggregates below MUST forward to inner, not ride the
+    // interface default: the default routes through this decorator's search()
+    // (the capped /search/ recall), so distinctAuthors/scanAuthors would silently
+    // truncate at the engine's grouping/page cap. scanAuthors in particular backs
+    // the guard-owner Bloom preload, where a missed author is a false negative
+    // (a skipped-but-needed tombstone probe).
     override suspend fun distinctAuthors(query: EventQuery): Set<String> = inner.distinctAuthors(query)
+
+    override suspend fun scanAuthors(query: EventQuery): Set<String> = inner.scanAuthors(query)
+
+    override suspend fun countDistinctAuthors(query: EventQuery): Int = inner.countDistinctAuthors(query)
+
+    override suspend fun countByKind(query: EventQuery): Map<Int, Int> = inner.countByKind(query)
 
     override fun close() {
         inner.close()
         reputations.close()
     }
 
+    // NOTE — this decorator deliberately does NOT forward supersedesViaPut or
+    // override putIfNewer, so it rides the read-then-supersede default (which
+    // routes through this put()/remove(), firing react() for BOTH the superseded
+    // old version and the new one). The engine's address-keyed conditional put
+    // (VespaEventIndex under VESPA_ADDRESS_KEYED) is a single atomic op that never
+    // exposes the removed old doc, so a 10040 that drops a service would leave that
+    // service's stored scores un-reattributed, and a bulk card load would lose the
+    // zero-read putAll cell update below. The conditional-put fast path therefore
+    // engages only on an undecorated index; through the trust projection,
+    // supersession stays read-based to keep the tensors consistent.
     override suspend fun put(doc: EventDoc) {
         inner.put(doc)
         react(doc)

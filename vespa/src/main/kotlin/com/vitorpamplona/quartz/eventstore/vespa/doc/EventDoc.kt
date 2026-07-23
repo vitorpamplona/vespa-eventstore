@@ -26,8 +26,6 @@ import com.vitorpamplona.quartz.nip01Core.core.HexKey
 import com.vitorpamplona.quartz.nip01Core.core.isAddressable
 import com.vitorpamplona.quartz.nip01Core.core.isReplaceable
 import com.vitorpamplona.quartz.nip01Core.store.RawEvent
-import com.vitorpamplona.quartz.nip01Core.tags.dTag.dTag
-import com.vitorpamplona.quartz.nip40Expiration.expiration
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -86,11 +84,24 @@ data class EventDoc(
             if (isSingleLetterTagName(name)) "$name:$value" else null
         }
 
-    /** The NIP-40 expiration timestamp (Quartz's reader); null = never expires. */
-    fun expiresAt(): Long? = tagsArray().expiration()
+    /**
+     * The NIP-40 expiration timestamp; null = never expires. A direct scan over
+     * [tags] — same result as Quartz's `String[][].expiration()` (first
+     * `expiration` tag with a parseable value) without the per-call `String[][]`
+     * deep copy [tagsArray] would make. Called on every put (see [indexFields]).
+     */
+    fun expiresAt(): Long? =
+        tags.firstNotNullOfOrNull { tag ->
+            if (tag.size > 1 && tag[0] == "expiration" && tag[1].isNotEmpty()) tag[1].toLongOrNull() else null
+        }
 
-    /** The `d` tag value, or "" when absent — the addressable bucketing key (missing == empty). */
-    fun dTagOrEmpty(): String = tagsArray().dTag()
+    /**
+     * The `d` tag value, or "" when absent — the addressable bucketing key
+     * (missing == empty). A direct scan over [tags], matching Quartz's
+     * `String[][].dTag()` (`firstTagValue("d") ?: ""`) with no `String[][]` copy;
+     * this is on the address/supersession hot path.
+     */
+    fun dTagOrEmpty(): String = tags.firstOrNull { it.size > 1 && it[0] == "d" }?.get(1) ?: ""
 
     /** The first `d` tag's value — an addressable event's identity key; null/blank = none. */
     fun dTag(): String? = dTagOrEmpty().takeIf { it.isNotEmpty() }

@@ -39,7 +39,7 @@ const val QUERY_FANOUT = 4
  * bulk path. Unlike [QUERY_FANOUT], these are WRITES — they pipeline safely over
  * the feed client's HTTP/2 streams (no summary-stage 504), so this runs far
  * higher to keep the conditional puts in flight the way the raw feed does.
- * Tunable via VESPA_PUT_FANOUT for the concurrency sweep. 32 is the measured
+ * Overridable via VESPA_PUT_FANOUT for deployment tuning. 32 is the measured
  * sweet spot on the dev box: the draft-churn A/B climbs 4→16 (939→1157 EPS) then
  * plateaus, and 64 regresses slightly (scheduling overhead) — beyond ~16 the
  * store's per-batch dedup read, not the put concurrency, is the limiter.

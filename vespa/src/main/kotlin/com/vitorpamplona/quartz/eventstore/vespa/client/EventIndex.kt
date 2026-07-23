@@ -42,6 +42,10 @@ interface EventIndex : AutoCloseable {
      * via [putIfNewer] (an address-keyed conditional put) rather than the client
      * reading the current versions first. The bulk path checks this to skip its
      * version-read stage. Default false — the read-then-supersede behavior.
+     *
+     * A decorator that REACTS to writes (e.g. the trust projection) intentionally
+     * keeps this false so supersession stays read-based and its react hooks see
+     * both the old and new versions; see [putIfNewer].
      */
     val supersedesViaPut: Boolean get() = false
 
@@ -158,7 +162,13 @@ interface EventIndex : AutoCloseable {
      * outcomes match the per-event rules exactly. The real client OVERRIDES it
      * with an address-keyed conditional put, letting the engine enforce
      * newest-wins atomically and reject stale versions server-side with no read.
-     * A decorator MUST delegate to its inner index, not this default.
+     *
+     * A REACTING decorator (the trust projection) does the opposite of the pure
+     * read paths: it must RIDE this default rather than forward to inner, because
+     * the default supersedes through the decorator's own [put]/[remove] — firing
+     * its reactions for the removed old version AND the new one. The engine's
+     * atomic conditional put exposes neither the old doc nor the fact that it also
+     * keeps [supersedesViaPut] false there.
      */
     suspend fun putIfNewer(doc: EventDoc): Boolean {
         val address =
@@ -166,14 +176,15 @@ interface EventIndex : AutoCloseable {
                 put(doc)
                 return true
             }
+        val dTag = doc.dTagOrEmpty()
         val q =
             // Addressable with a non-empty d: narrow by d so a prolific author's
             // other addresses of this kind don't push the target past the search
             // page. Replaceable, or addressable with an empty/missing d (nothing to
             // recall on), stay broad by (kind, author) — the addressOrNull filter
             // below is the exact match and normalizes missing == empty d.
-            if (doc.kind.isAddressable() && doc.dTagOrEmpty().isNotEmpty()) {
-                EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey), tags = mapOf("d" to listOf(doc.dTagOrEmpty())))
+            if (doc.kind.isAddressable() && dTag.isNotEmpty()) {
+                EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey), tags = mapOf("d" to listOf(dTag)))
             } else {
                 EventQuery(kinds = listOf(doc.kind), authors = listOf(doc.pubkey))
             }

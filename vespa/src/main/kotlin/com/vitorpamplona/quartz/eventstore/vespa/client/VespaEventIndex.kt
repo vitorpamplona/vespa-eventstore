@@ -234,7 +234,15 @@ class VespaEventIndex(
                     buildJsonObject { put("fields", doc.indexFields()) }.toString(),
                     feedParams().createIfNonExistent(true).testAndSetCondition(condition),
                 ).await()
-        return result.type() != Result.Type.conditionNotMet
+        // success = stored (created or newest-wins overwrite); conditionNotMet =
+        // a same-or-newer version already held the address, so [doc] is stale.
+        // A transport/engine failure completes the future exceptionally (never a
+        // Result here), so the else guards only a future enum addition.
+        return when (result.type()) {
+            Result.Type.success -> true
+            Result.Type.conditionNotMet -> false
+            else -> error("vespa conditional put for $address returned ${result.type()}")
+        }
     }
 
     override suspend fun remove(id: String) {
@@ -246,6 +254,14 @@ class VespaEventIndex(
 
     /** All removes in flight together over HTTP/2, like [putAll]. */
     override suspend fun removeAll(ids: List<String>) {
+        // Address-keyed replaceables live at an address docid, not their event id,
+        // so a raw removeOp(id) would silently miss them. Resolve each the way
+        // remove() does (get -> docIdOf), bounded-concurrent. Regular events are
+        // id-keyed and just pipeline by id.
+        if (addressKeyed) {
+            ids.mapBounded(ID_GET_FANOUT) { remove(it) }
+            return
+        }
         ids.map { removeOp(it) }.forEach { it.await() }
     }
 

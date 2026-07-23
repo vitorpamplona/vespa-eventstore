@@ -145,4 +145,30 @@ class EventDocTest {
     fun `malformed event json throws`() {
         assertFailsWith<Exception> { EventDoc.fromEventJson("""{"id":"x"}""") }
     }
+
+    private fun tagged(tags: List<List<String>>) = doc.copy(tags = tags)
+
+    @Test
+    fun `dTagOrEmpty is the first d value, empty when absent or valueless`() {
+        assertEquals("subject", tagged(listOf(listOf("d", "subject"))).dTagOrEmpty())
+        // First d wins; a later d is ignored (firstTagValue semantics).
+        assertEquals("first", tagged(listOf(listOf("d", "first"), listOf("d", "second"))).dTagOrEmpty())
+        // Extra values are kept as-is; only the first value is the key.
+        assertEquals("k", tagged(listOf(listOf("d", "k", "ignored"))).dTagOrEmpty())
+        // Missing == empty: no d tag, or a valueless d, both read as "".
+        assertEquals("", tagged(listOf(listOf("e", "x".repeat(64)))).dTagOrEmpty())
+        assertEquals("", tagged(listOf(listOf("d"))).dTagOrEmpty())
+    }
+
+    @Test
+    fun `expiresAt is the first parseable expiration, null otherwise`() {
+        assertEquals(200L, tagged(listOf(listOf("expiration", "200"))).expiresAt())
+        // First expiration tag wins.
+        assertEquals(200L, tagged(listOf(listOf("expiration", "200"), listOf("expiration", "300"))).expiresAt())
+        // No expiration tag -> never expires.
+        assertEquals(null, tagged(listOf(listOf("d", "k"))).expiresAt())
+        // Valueless or unparseable expiration contributes nothing (scan continues).
+        assertEquals(null, tagged(listOf(listOf("expiration"))).expiresAt())
+        assertEquals(300L, tagged(listOf(listOf("expiration", "later"), listOf("expiration", "300"))).expiresAt())
+    }
 }
