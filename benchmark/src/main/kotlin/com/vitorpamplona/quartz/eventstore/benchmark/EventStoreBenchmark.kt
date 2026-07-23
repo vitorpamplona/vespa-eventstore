@@ -157,6 +157,12 @@ object EventStoreBenchmark {
             return
         }
 
+        // id-lookup fan-out sweep: N ids per REQ across the fast-path threshold (see IdLookupProbe).
+        if (System.getenv("BENCH_ID_LOOKUP") != null) {
+            IdLookupProbe.run(vespaUrl, seed)
+            return
+        }
+
         // Bulk-ingest sweep: chunk size x parallel streams against a live Vespa
         // (see IngestSweep) — which knob raises the throttle-floor-bound ingest.
         if (System.getenv("BENCH_INGEST_SWEEP") != null) {
